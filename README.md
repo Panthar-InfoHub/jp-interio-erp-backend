@@ -1,0 +1,389 @@
+# JP Interio — Backend API
+
+The server for the **JP Interio Channel & Rewards Platform**, built by Panthar Infohub.
+
+- Partners (carpenters, dealers, OEMs) scan QR codes on products to earn points (1 point = ₹1) and cash them out.
+- Field staff manage partners, tasks, leads and requests inside a 6-tier hierarchy.
+- The web console, the field app and the partner app all talk to this one API.
+
+> The full build plan is in `../docs/Backend Development Plan.md`, and every decision is in `../docs/context/DECISIONS.md`.
+
+---
+
+## Tech stack
+
+| Part | Tool |
+|---|---|
+| Runtime | Node.js 24, TypeScript (strict, ESM) |
+| Web framework | Express 5 |
+| Database | PostgreSQL on Neon, through Prisma 7 (Neon adapter) |
+| Validation | Zod 4 |
+| Logging | pino + pino-http |
+| Formatting | Prettier (ESLint comes later: DEC-023) |
+| Scripts | tsx |
+
+---
+
+## 1. Setup from scratch
+
+**You need:** Node.js **24 or newer**, npm, and a Neon PostgreSQL database.
+
+```bash
+# 1. Install packages (this also generates the Prisma client)
+npm install
+
+# 2. Create your .env from the example and fill it in (see section 2)
+cp .env.example .env
+
+# 3. Create all tables in the database
+npm run db:migrate
+
+# 4. Fill in the starting data: 6 roles, the first Admin, default settings
+npm run db:seed
+
+# 5. Start the server
+npm run dev
+```
+
+Check that it works: open **http://localhost:8080/health**. You should see `"status": "ok", "database": "up"`.
+
+> **Neon sleeps** after a few minutes without use on the free plan. The first request after that can fail or be slow while it wakes up. Just try again.
+
+---
+
+## 2. Environment variables (`.env`)
+
+| Variable | Required | What it is |
+|---|---|---|
+| `NODE_ENV` | No | `development` (default), `production` or `test` |
+| `PORT` | No | Server port. Default `8080` |
+| `LOG_LEVEL` | No | `debug`, `info`, `warn`… Default: `debug` in development, `info` in production |
+| `DATABASE_URL` | **Yes** | Neon **pooled** connection (the host contains `-pooler`). Used by the app while running |
+| `DIRECT_URL` | **Yes** | Neon **direct** connection (no `-pooler`). Used by Prisma for migrations |
+| `CORS_ORIGINS` | No | Comma-separated list of web addresses allowed to call the API. Default `http://localhost:3000` |
+| `SEED_ADMIN_NAME` | For seed | Name of the first Admin |
+| `SEED_ADMIN_PHONE` | For seed | First Admin's 10-digit Indian mobile number. Stored as `91XXXXXXXXXX` |
+| `SEED_ADMIN_EMAIL` | No | First Admin's email (optional) |
+
+The server checks these on start-up and stops with a clear message if something is missing.
+**Never commit `.env`.**
+
+---
+
+## 3. Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the server and restart it when a file changes |
+| `npm run build` | Compile to `dist/` |
+| `npm start` | Run the compiled server (production) |
+| `npm run typecheck` | Check all TypeScript types |
+| `npm run format` | Format all code with Prettier |
+| `npm run format:check` | Check formatting without changing files ("lint" for now) |
+| `npm run db:migrate` | Create and apply a migration after you change `prisma/schema.prisma` (development) |
+| `npm run db:deploy` | Apply existing migrations (production / CI) |
+| `npm run db:generate` | Regenerate the Prisma client |
+| `npm run db:seed` | Add the starting data. Safe to run again (see section 7) |
+| `npm run db:studio` | Open Prisma Studio to browse the data |
+
+**Before saying a task is done**, run `npm run typecheck` and `npm run format:check`. Both must pass.
+
+`npx prisma migrate reset` wipes the database, re-applies all migrations and runs the seed. **Development only.**
+
+---
+
+## 4. Folder structure
+
+```
+backend/
+├── prisma/
+│   ├── schema.prisma        Database tables (models and enums)
+│   ├── migrations/          SQL migrations (generated, never edit old ones)
+│   └── seed.ts              Starting data
+├── prisma.config.ts         Prisma settings (schema, migrations, seed, DIRECT_URL)
+└── src/
+    ├── server.ts            Starts the HTTP server, graceful shutdown
+    ├── app.ts               Express app: middleware order, routes, error handler
+    ├── config/
+    │   ├── env.ts           Reads and checks .env
+    │   ├── roles.ts         The 6 roles and ROLE.ADMIN etc. constants
+    │   ├── settings.ts      Master list of business settings
+    │   └── sensitiveFields.ts  Secret field names (hidden in logs and audit)
+    ├── lib/
+    │   ├── prisma.ts        The database client
+    │   ├── logger.ts        pino logger (request ID on every line, secrets hidden)
+    │   └── requestContext.ts  Request ID, IP and device for the current request
+    ├── middlewares/
+    │   ├── requestContext.ts  Gives every request an ID (must run first)
+    │   ├── validate.ts      Checks params / query / body with Zod
+    │   ├── notFound.ts      404 for unknown routes
+    │   └── errorHandler.ts  The ONLY place errors become responses
+    ├── routes/              URL → controller (index.ts mounts every feature)
+    ├── controllers/         Read the request, call a service, send the reply
+    ├── services/            Business logic and database work
+    ├── validators/          Zod rules for each feature (+ common.ts)
+    ├── utils/               apiResponse, errors, asyncHandler, pagination, phone
+    └── generated/prisma/    Generated Prisma client (never edit, not committed)
+```
+
+---
+
+## 5. How a request flows
+
+```
+request
+  → requestContext   (gives it an ID)
+  → pino-http        (logs it)
+  → helmet, cors     (security)
+  → JSON body reader
+  → route → validate(...) → controller → service → database
+  → sendSuccess(...)              on success
+  → throw AppError → errorHandler on failure
+```
+
+**The layers:**
+- **Routes** only connect a URL to its checks and its controller.
+- **Controllers** stay thin: read the clean request, call the service, send the reply.
+- **Services** hold all business logic and database work.
+- **Validators** hold the Zod rules for each feature.
+
+**Imports:** relative imports must end in `.js` (ESM), for example `import { prisma } from "../lib/prisma.js";`
+
+---
+
+## 6. API conventions
+
+### 6.1 Response format
+
+**Success:**
+```json
+{
+  "success": true,
+  "message": "optional text",
+  "data": { },
+  "meta": { "page": 1, "limit": 20, "total": 53, "totalPages": 3 }
+}
+```
+`meta` appears on lists only. Use `sendSuccess(res, status, data, message?, meta?)` from `src/utils/apiResponse.ts`.
+
+**Error:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request data",
+    "details": [{ "path": "body.points", "message": "Too small: expected number to be >=100" }],
+    "requestId": "0192f5a0-…"
+  }
+}
+```
+
+### 6.2 Errors
+
+**Throw** one of these from `src/utils/errors.ts`. Never send an error reply yourself:
+
+| Class | Status | Code |
+|---|---|---|
+| `ValidationError` | 400 | `VALIDATION_ERROR` |
+| `UnauthorizedError` | 401 | `UNAUTHORIZED` |
+| `ForbiddenError` | 403 | `FORBIDDEN` |
+| `NotFoundError` | 404 | `NOT_FOUND` |
+| `ConflictError` | 409 | `CONFLICT` |
+| `TooManyRequestsError` | 429 | `TOO_MANY_REQUESTS` |
+| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` |
+| `AppError` | any | your own code |
+
+The error handler also turns these automatically:
+- Zod errors → 400.
+- A duplicate unique value (Prisma P2002) → 409.
+- A record not found (P2025) → 404.
+- Broken JSON → 400.
+- A body that's too big → 413.
+- The database can't be reached → 503.
+
+Anything else is a bug and becomes a 500. In production its message is hidden from the client.
+
+### 6.3 Request ID
+
+- Every request gets an ID, returned in the **`X-Request-Id`** header and in `error.requestId`.
+- If the client sends its own safe `X-Request-Id` (letters, numbers, `-` or `_`, up to 100 characters), it is reused.
+- Every log line and every audit row carries the same ID. **To debug a failed request, search the logs for its ID.**
+- In code, `getRequestContext()` gives `{ requestId, ip, userAgent }`.
+
+### 6.4 Validation
+
+Every route checks its input with `validate(...)` before the controller runs:
+
+```ts
+import { z } from "zod";
+import { validate, type RequestSchemas, type ValidatedRequest } from "../middlewares/validate.js";
+import { idParams } from "../validators/common.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const schemas = {
+  params: idParams,
+  body: z.object({ points: z.number().int().min(100) }),
+} satisfies RequestSchemas;
+
+router.post(
+  "/:id/payouts",
+  validate(schemas),
+  asyncHandler<ValidatedRequest<typeof schemas>>(async (req, res) => {
+    req.body.points; // typed as number, already checked
+  })
+);
+```
+
+- All problems from params, query and body come back together, in one 400.
+- Unknown fields are **removed**.
+- Text like `"5"` becomes a number where the schema uses `z.coerce`.
+- Ready-made rules in `validators/common.ts`:
+  - `idParams` for a UUID `:id`;
+  - `phoneSchema`, which cleans any Indian mobile to `91XXXXXXXXXX`.
+
+### 6.5 Lists: paging, sorting and filters
+
+**Every list is paged.** No endpoint returns an unlimited list.
+
+| Query | Meaning | Default |
+|---|---|---|
+| `?page=2` | Page number, from 1 | `1` |
+| `?limit=50` | Rows per page, 1 to **100** | `20` |
+| `?sort=name` | Sort by one field, A→Z / oldest first | set per list (usually `-createdAt`) |
+| `?sort=-name` | The same field, reversed (Z→A / newest first) | |
+| `?status=active` | Filters: plain `field=value` pairs, defined per list | — |
+
+- Only **one** sort field per request.
+- Each list allows only its own sort fields. Any other value is a 400 that lists the allowed ones.
+- Asking for a page past the end returns an empty list with the correct `meta`.
+
+```ts
+import { listQuery, pageMeta, toPrismaOrderBy, toPrismaPaging } from "../utils/pagination.js";
+
+const zoneListQuery = listQuery({
+  sortFields: ["name", "code", "createdAt"],
+  defaultSort: "-createdAt",
+}).extend({ status: z.enum(["active", "inactive"]).optional() });
+
+// in the service:
+const [rows, total] = await prisma.$transaction([
+  prisma.zone.findMany({
+    where,
+    ...toPrismaPaging(q.page, q.limit),
+    orderBy: toPrismaOrderBy(q.sort),
+  }),
+  prisma.zone.count({ where }),
+]);
+sendSuccess(res, 200, rows, undefined, pageMeta(q.page, q.limit, total));
+```
+
+`toPrismaOrderBy` always adds the `id` as a tie-breaker, so rows never repeat or go missing between pages. For the `settings` table, which has no `id`, pass `"key"` as the second argument.
+
+---
+
+## 7. Shared building blocks
+
+### Settings: `getSetting(key)`
+
+Business values the Admin can change without a code change: OTP expiry, minimum payout, session length and so on.
+
+```ts
+import { getSetting } from "../services/settings.service.js";
+const minPoints = await getSetting("payout.min_points"); // → 100 (a number)
+```
+
+- Every setting is listed in `src/config/settings.ts` with its type, default and description. **A new setting = one line there, then `npm run db:seed`.**
+- A misspelled key doesn't compile.
+- Values are cached for 60 seconds. After changing a setting, call `clearSettingsCache(key)`.
+- A missing or broken setting stops with a clear 500 `SETTING_ERROR`. It never quietly uses a default.
+
+### Audit log: `recordAudit(tx, {...})`
+
+Every change must write an audit row **inside the same transaction**:
+
+```ts
+await prisma.$transaction(async (tx) => {
+  await tx.zone.update({ where: { id }, data: { name } });
+  await recordAudit(tx, {
+    actorId: currentUser.id, // null for system actions
+    action: "zone.update", // always "thing.verb"
+    entity: { type: "zone", id },
+    before: { name: oldName }, // only the fields that changed
+    after: { name },
+  });
+});
+```
+
+- Only a **transaction** client compiles. Passing the plain `prisma` client is a type error.
+- The request ID, IP and device are filled in automatically.
+- Secret fields are hidden automatically:
+  - OTP, password and token → `[REDACTED]`;
+  - Aadhaar, PAN, bank account and UPI ID → last 4 characters only.
+- `audit_log` is **insert-only**. Never update or delete its rows.
+
+### Roles
+
+Use `ROLE.ADMIN`, `ROLE.ZONAL_HEAD` and the rest from `src/config/roles.ts`, never bare numbers.
+
+| ID | Key | Tier | App |
+|---|---|---|---|
+| 1 | `admin` | 0 | web |
+| 2 | `sub_admin` | 1 | web |
+| 3 | `zonal_head` | 2 | web |
+| 4 | `asm` | 3 | field |
+| 5 | `sales_executive` | 4 | field |
+| 6 | `partner` | 5 | partner |
+
+### Phone numbers
+
+They are always stored as **`91` + 10 digits**, with no `+` (for example `919876543210`), which is the format MSG91 expects. Clean input with `normalizePhone()` or `phoneSchema`.
+
+### Seed (`npm run db:seed`)
+
+- Adds the 6 roles, the first Admin (from `.env`) and all settings, in one transaction.
+- **Safe to run again:** it only adds what is missing.
+  - It never creates a second Admin.
+  - It **never overwrites** a setting the Admin has changed.
+- Each change writes an audit row with actor = system.
+
+---
+
+## 8. Rules every feature must follow
+
+These are short versions; the full list is R1–R14 in the build plan.
+
+1. **Permissions are checked on the server.** Never trust the client to hide things.
+2. **Scope:** every list and every get-by-ID goes through the scope filter. A record outside the user's scope returns **404**.
+3. **The rewards ledger is insert-only.** Points are computed by the server only.
+4. **Audit:** every change writes `audit_log` in the same transaction.
+5. **No hard deletes** of business records. Change their status instead.
+6. **Changes to several tables happen in one transaction.**
+7. **Scan, payout and request creation are retry-safe** (idempotent).
+8. **Types:** points are `Int`, rupees `Decimal(12,2)`, IDs are UUIDs, times are UTC.
+9. **Never log** OTPs, tokens, passwords, or Aadhaar/PAN/bank numbers.
+   - The logger hides the field names in `src/config/sensitiveFields.ts`.
+   - **A new secret field must use one of those names, or be added to that list.**
+10. **Every list is paged** (section 6.5).
+
+---
+
+## 9. Adding a new feature (checklist)
+
+1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
+2. Write Zod rules in `src/validators/<feature>.schema.ts`.
+3. Put the business logic in `src/services/<feature>.service.ts`, with an audit row for every change.
+4. Write a thin controller in `src/controllers/<feature>.controller.ts`.
+5. Create the routes in `src/routes/<feature>.routes.ts` and mount them in `src/routes/index.ts`.
+6. Add any new settings to `src/config/settings.ts` and run `npm run db:seed`.
+7. Document the endpoints in **Apidog** (there is no Swagger in this project: DEC-015).
+8. Run `npm run typecheck` and `npm run format:check`.
+
+---
+
+## 10. Not in yet
+
+- **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
+- **Automated tests:** written at the end of the project (DEC-014).
+- **Rate limiting:** added in Module 18, before go-live (DEC-016).
+- **Login / auth:** Module 2 (phone + OTP for everyone, through MSG91).

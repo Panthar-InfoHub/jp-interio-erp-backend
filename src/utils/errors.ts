@@ -53,9 +53,15 @@ export class ConflictError extends AppError {
   }
 }
 
+/** Something we depend on (e.g. the database) can't be reached; the client may retry. */
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "Service temporarily unavailable, please try again") {
+    super(message, 503, "SERVICE_UNAVAILABLE");
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = "Too many requests, please try again later") {
     super(message, 429, "TOO_MANY_REQUESTS");
   }
 }
-

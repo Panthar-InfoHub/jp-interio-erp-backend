@@ -7,13 +7,219 @@ datasource db {
   provider = "postgresql"
 }
 
-// Example model: used to test the setup. Replace with your real models later.
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// Conventions: UUID ids (v7, time-ordered), UTC timestamps (timestamptz),
+// camelCase in code mapped to snake_case in the database.
 
+// ---- Enums ----
+
+/// Which app a role signs in to.
+enum AppType {
+  web
+  field
+  partner
+
+  @@map("app_type")
+}
+
+enum UserStatus {
+  active
+  suspended
+  deactivated
+
+  @@map("user_status")
+}
+
+enum ZoneStatus {
+  active
+  inactive
+
+  @@map("zone_status")
+}
+
+/// The feature areas an Admin can give a Sub-Admin (DEC-019).
+enum SubAdminArea {
+  products
+  qr
+  rewards
+  partners
+  tasks
+  leads_requests
+
+  @@map("sub_admin_area")
+}
+
+enum PartnerType {
+  carpenter
+  dealer
+  oem
+
+  @@map("partner_type")
+}
+
+enum KycState {
+  not_submitted
+  pending
+  verified
+  rejected
+
+  @@map("kyc_state")
+}
+
+enum SettingType {
+  int
+  string
+  bool
+  json
+
+  @@map("setting_type")
+}
+
+// ---- Models ----
+
+/// The 6 fixed roles. Seeded, never created from the API.
+model Role {
+  id   Int     @id @db.SmallInt
+  key  String  @unique @db.VarChar(30)
+  name String  @db.VarChar(50)
+  /// 0 = Admin … 5 = Partner
+  tier Int     @db.SmallInt
+  app  AppType
+
+  users User[]
+
+  @@map("roles")
+}
+
+model Zone {
+  id     String     @id @default(uuid(7)) @db.Uuid
+  name   String     @db.VarChar(100)
+  /// Cannot change once anything uses the zone (enforced in the service).
+  code   String     @unique @db.VarChar(20)
+  region String?    @db.VarChar(100)
+  state  String?    @db.VarChar(100)
+  status ZoneStatus @default(active)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users User[]
+
+  @@map("zones")
+}
+
+/// One table for staff and partners. One phone = one account = one role (DEC-022).
+model User {
+  id       String     @id @default(uuid(7)) @db.Uuid
+  name     String     @db.VarChar(100)
+  phone    String     @unique @db.VarChar(15)
+  email    String?    @unique @db.VarChar(255)
+  roleId   Int        @map("role_id") @db.SmallInt
+  /// The manager above this user. Empty for the Admin.
+  parentId String?    @map("parent_id") @db.Uuid
+  /// Empty for Admin and Sub-Admins; set for Zonal Heads and everyone below.
+  zoneId   String?    @map("zone_id") @db.Uuid
+  status   UserStatus @default(active)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  role     Role   @relation(fields: [roleId], references: [id])
+  parent   User?  @relation("UserParent", fields: [parentId], references: [id])
+  children User[] @relation("UserParent")
+  zone     Zone?  @relation(fields: [zoneId], references: [id])
+
+  subAdminAreas        SubAdminAreaGrant[] @relation("GrantHolder")
+  subAdminAreasGranted SubAdminAreaGrant[] @relation("GrantGiver")
+  partnerProfile       PartnerProfile?     @relation("ProfileOwner")
+  assignedPartners     PartnerProfile[]    @relation("ProfileSalesExecutive")
+  onboardedPartners    PartnerProfile[]    @relation("ProfileOnboardedBy")
+  settingsUpdated      Setting[]
+  auditEntries         AuditLog[]
+
+  @@index([roleId])
+  @@index([parentId])
+  @@index([zoneId])
+  @@index([status])
   @@map("users")
+}
+
+/// Which areas a Sub-Admin holds. Removing an area deletes the row;
+/// the history lives in audit_log (DEC-018, DEC-019).
+model SubAdminAreaGrant {
+  userId      String       @map("user_id") @db.Uuid
+  area        SubAdminArea
+  grantedById String       @map("granted_by") @db.Uuid
+  grantedAt   DateTime     @default(now()) @map("granted_at") @db.Timestamptz(3)
+
+  user      User @relation("GrantHolder", fields: [userId], references: [id])
+  grantedBy User @relation("GrantGiver", fields: [grantedById], references: [id])
+
+  @@id([userId, area])
+  @@map("sub_admin_areas")
+}
+
+/// Extra details for partners only. Profile fields stay empty until the
+/// partner (or field staff) fills them in during onboarding (Module 5).
+model PartnerProfile {
+  userId           String       @id @map("user_id") @db.Uuid
+  businessName     String?      @map("business_name") @db.VarChar(150)
+  partnerType      PartnerType? @map("partner_type")
+  address          String?      @db.VarChar(500)
+  city             String?      @db.VarChar(100)
+  state            String?      @db.VarChar(100)
+  pincode          String?      @db.VarChar(6)
+  kycState         KycState     @default(not_submitted) @map("kyc_state")
+  /// Optional; must report to the partner's owning ASM (checked in the service).
+  salesExecutiveId String?      @map("sales_executive_id") @db.Uuid
+  onboardedById    String?      @map("onboarded_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user           User  @relation("ProfileOwner", fields: [userId], references: [id])
+  salesExecutive User? @relation("ProfileSalesExecutive", fields: [salesExecutiveId], references: [id])
+  onboardedBy    User? @relation("ProfileOnboardedBy", fields: [onboardedById], references: [id])
+
+  @@index([kycState])
+  @@index([salesExecutiveId])
+  @@map("partner_profiles")
+}
+
+/// Business values the Admin can change without a code change.
+/// `value` is stored as text and parsed by `type` in the settings service.
+model Setting {
+  key         String      @id @db.VarChar(100)
+  value       String
+  type        SettingType
+  description String?     @db.VarChar(500)
+  updatedById String?     @map("updated_by") @db.Uuid
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  @@map("settings")
+}
+
+/// Insert-only record of every change. A database trigger (Task 4) blocks
+/// UPDATE and DELETE. Never store secrets in before/after.
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  /// Empty for system actions (seed, scheduled jobs).
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String?  @map("entity_id") @db.VarChar(100)
+  before     Json?
+  after      Json?
+  ip         String?  @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.VarChar(500)
+  requestId  String?  @map("request_id") @db.VarChar(100)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_log")
 }

@@ -13,6 +13,8 @@ export interface ApiErrorResponse {
     code: string;
     message: string;
     details?: unknown;
+    /** Same as the X-Request-Id header, so the app can show it to the user. */
+    requestId?: string;
   };
 }
 

@@ -1,0 +1,12 @@
+# Generated or build output
+dist/
+src/generated/
+prisma/migrations/
+
+# Local tool settings
+.claude/
+
+# Lock file and docs are not formatted
+package-lock.json
+*.md
+*.docx

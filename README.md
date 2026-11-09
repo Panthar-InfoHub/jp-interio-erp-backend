@@ -61,6 +61,14 @@ Check that it works: open **http://localhost:8080/health**. You should see `"sta
 | `DATABASE_URL` | **Yes** | Neon **pooled** connection (the host contains `-pooler`). Used by the app while running |
 | `DIRECT_URL` | **Yes** | Neon **direct** connection (no `-pooler`). Used by Prisma for migrations |
 | `CORS_ORIGINS` | No | Comma-separated list of web addresses allowed to call the API. Default `http://localhost:3000` |
+| `AUTH_SECRET` | **Yes** | One long random secret (32+ characters). It signs login tokens and scrambles OTPs and refresh tokens. **Changing it logs everyone out.** The command to generate one is in `.env.example` |
+| `SMS_PROVIDER` | No | `dummy` (default: prints the OTP in the terminal) or `msg91` (real SMS). `dummy` is refused in production |
+| `MSG91_AUTH_KEY` | With msg91 | MSG91 auth key. **Never commit it** |
+| `MSG91_OTP_TEMPLATE_ID` | With msg91 | MSG91's own template ID (not the long DLT number) |
+| `MSG91_OTP_VARIABLE` | No | The template variable that gets the OTP. Default `otp` |
+| `TEST_PHONES` | No | Comma-separated test mobiles. They log in with `TEST_OTP` and get no SMS |
+| `TEST_OTP` | With test phones | The fixed 6-digit OTP for test phones |
+| `ALLOW_TEST_PHONES_IN_PRODUCTION` | No | `false` (default). Test phones are off in production unless this is `true` |
 | `SEED_ADMIN_NAME` | For seed | Name of the first Admin |
 | `SEED_ADMIN_PHONE` | For seed | First Admin's 10-digit Indian mobile number. Stored as `91XXXXXXXXXX` |
 | `SEED_ADMIN_EMAIL` | No | First Admin's email (optional) |
@@ -112,9 +120,12 @@ backend/
     ├── lib/
     │   ├── prisma.ts        The database client
     │   ├── logger.ts        pino logger (request ID on every line, secrets hidden)
-    │   └── requestContext.ts  Request ID, IP and device for the current request
+    │   ├── requestContext.ts  Request ID, IP and device for the current request
+    │   ├── auth/            Tokens (access / refresh / OTP hashes) and the refresh cookie
+    │   └── sms/             SMS senders (dummy, MSG91) and test phones
     ├── middlewares/
     │   ├── requestContext.ts  Gives every request an ID (must run first)
+    │   ├── auth.ts          requireAuth, requireApp, requireRole, getAuthUser
     │   ├── validate.ts      Checks params / query / body with Zod
     │   ├── notFound.ts      404 for unknown routes
     │   └── errorHandler.ts  The ONLY place errors become responses
@@ -135,8 +146,8 @@ request
   → requestContext   (gives it an ID)
   → pino-http        (logs it)
   → helmet, cors     (security)
-  → JSON body reader
-  → route → validate(...) → controller → service → database
+  → JSON body reader, cookie reader
+  → route → requireAuth (protected routes) → validate(...) → controller → service → database
   → sendSuccess(...)              on success
   → throw AppError → errorHandler on failure
 ```
@@ -349,7 +360,57 @@ They are always stored as **`91` + 10 digits**, with no `+` (for example `919876
 
 ---
 
-## 8. Rules every feature must follow
+## 8. Login & sessions (Module 2)
+
+Everyone, Admin included, logs in with **phone + OTP**. Each role may use only its own app: `web` (Admin, Sub-Admin, Zonal Head), `field` (ASM, Sales Executive) or `partner`.
+
+### 8.1 Endpoints (all under `/api/auth`)
+
+| Method & path | Login needed | What it does |
+|---|---|---|
+| `POST /otp/request` | No | `{ phone, app }` → sends an OTP. 30 s wait before asking again |
+| `POST /otp/verify` | No | `{ phone, app, otp, deviceId?, deviceName? }` → logs in. A new partner number creates the partner account |
+| `POST /refresh` | No | Swaps the refresh token for a new access token + new refresh token |
+| `GET /me` | Yes | Who am I |
+| `GET /sessions` | Yes | My logged-in devices (`isCurrent` marks this one) |
+| `DELETE /sessions/:id` | Yes | Log out one of my devices |
+| `POST /logout` | Yes | Log out this device |
+| `POST /logout-all` | Yes | Log out every device, this one included |
+
+### 8.2 Tokens
+
+- **Access token:** sent as `Authorization: Bearer <token>`. It lasts **15 minutes**.
+- **Refresh token:**
+  - **Apps** get it in the login reply and send it back in the `/refresh` body.
+  - **Web** gets it in the `jp_refresh` httpOnly cookie, sent automatically.
+  - It lasts 7 days (web) or 60 days (apps), and **each refresh restarts the clock**.
+  - Each refresh gives a new one. **Using an old one again ends that session** (treated as stolen).
+- **Partners:** one device only. A new login ends the old device's session.
+- **What the app should do:** on `401 ACCESS_TOKEN_INVALID`, call `/refresh` once. If that fails, go to the login screen. **The web console must not run two refreshes at the same time.**
+
+### 8.3 Protecting a route
+
+```ts
+import { requireAuth, requireApp, requireRole, getAuthUser } from "../middlewares/auth.js";
+import { ROLE } from "../config/roles.js";
+
+router.get("/zones", requireAuth, requireApp("web"), requireRole(ROLE.ADMIN), controller.list);
+
+// in the controller:
+const user = getAuthUser(req); // id, roleId, tier, zoneId, parentId, subAdminAreas…
+```
+
+- `requireAuth` checks the session and user in the database on **every** request, so a logout or deactivation works immediately.
+- To end all of a user's sessions (deactivate, transfer, role change), call `revokeAllSessions(tx, { userId, reason, actorId })` from `services/session.service.ts`, inside your transaction.
+
+### 8.4 Testing login without SMS
+
+- With `SMS_PROVIDER=dummy`, the OTP is printed in the server terminal as `[DEV SMS] OTP for …`.
+- Numbers listed in `TEST_PHONES` always use `TEST_OTP` and never get an SMS.
+
+---
+
+## 9. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -365,10 +426,11 @@ These are short versions; the full list is R1–R14 in the build plan.
    - The logger hides the field names in `src/config/sensitiveFields.ts`.
    - **A new secret field must use one of those names, or be added to that list.**
 10. **Every list is paged** (section 6.5).
+11. **Every protected route uses `requireAuth`** (section 8.3).
 
 ---
 
-## 9. Adding a new feature (checklist)
+## 10. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. Write Zod rules in `src/validators/<feature>.schema.ts`.
@@ -381,9 +443,9 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 10. Not in yet
+## 11. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).
-- **Rate limiting:** added in Module 18, before go-live (DEC-016).
-- **Login / auth:** Module 2 (phone + OTP for everyone, through MSG91).
+- **Rate limiting** (including per-phone and per-IP OTP limits): added in Module 18, before go-live (DEC-016).
+- **Real MSG91 SMS:** built, not yet tested with a real key. The current template is a temporary one and must be replaced with a DLT-approved OTP template before production (DEC-034).

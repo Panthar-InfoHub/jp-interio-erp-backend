@@ -4,7 +4,7 @@
  */
 
 /** Never kept anywhere: logs and the audit log show "[REDACTED]". */
-export const SECRET_FIELDS = ["password", "token", "refreshToken", "otp"] as const;
+export const SECRET_FIELDS = ["password", "token", "accessToken", "refreshToken", "otp"] as const;
 
 /**
  * ID-type numbers. The audit log keeps only the last 4 characters (XXXXXXXX1234)

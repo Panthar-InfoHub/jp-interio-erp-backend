@@ -19,6 +19,8 @@ export const logger = pino({
     paths: [
       "req.headers.authorization",
       "req.headers.cookie",
+      // The reply's Set-Cookie carries the web refresh token.
+      'res.headers["set-cookie"]',
       // The raw body of a request whose JSON could not be parsed (may hold an OTP).
       "err.body",
       ...[...SECRET_FIELDS, ...MASKED_FIELDS].flatMap((field) => [

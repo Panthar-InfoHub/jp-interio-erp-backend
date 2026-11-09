@@ -74,6 +74,20 @@ enum SettingType {
   @@map("setting_type")
 }
 
+/// Why a session was ended before it expired.
+enum SessionRevokeReason {
+  logout
+  logout_all
+  /// A partner logged in on another device (one device only, DEC-032).
+  new_device_login
+  /// An old refresh token was used again: treated as stolen.
+  token_reuse
+  user_deactivated
+  admin_revoked
+
+  @@map("session_revoke_reason")
+}
+
 // ---- Models ----
 
 /// The 6 fixed roles. Seeded, never created from the API.
@@ -110,7 +124,8 @@ model Zone {
 /// One table for staff and partners. One phone = one account = one role (DEC-022).
 model User {
   id       String     @id @default(uuid(7)) @db.Uuid
-  name     String     @db.VarChar(100)
+  /// Empty for a new partner until onboarding (Module 5); staff always have one (DEC-038).
+  name     String?    @db.VarChar(100)
   phone    String     @unique @db.VarChar(15)
   email    String?    @unique @db.VarChar(255)
   roleId   Int        @map("role_id") @db.SmallInt
@@ -135,6 +150,7 @@ model User {
   onboardedPartners    PartnerProfile[]    @relation("ProfileOnboardedBy")
   settingsUpdated      Setting[]
   auditEntries         AuditLog[]
+  sessions             Session[]
 
   @@index([roleId])
   @@index([parentId])
@@ -222,4 +238,51 @@ model AuditLog {
   @@index([actorId])
   @@index([createdAt])
   @@map("audit_log")
+}
+
+/// One row per OTP sent (DEC-033). The OTP itself is never stored, only its hash.
+/// Not linked to users: a new partner's phone has no user yet.
+model OtpCode {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  /// Stored as 91XXXXXXXXXX (DEC-031).
+  phone     String    @db.VarChar(15)
+  app       AppType
+  codeHash  String    @map("code_hash") @db.VarChar(64)
+  /// Wrong tries so far; the OTP dies at `otp.max_attempts`.
+  attempts  Int       @default(0) @db.SmallInt
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  /// Set when the OTP is used successfully; it can never be used again.
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  ip        String?   @db.VarChar(45)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // Latest OTP for a phone + app (verify, resend wait), and per-IP limits (Module 18).
+  @@index([phone, app, createdAt])
+  @@index([ip, createdAt])
+  @@map("otp_codes")
+}
+
+/// One row per logged-in device. Only token hashes are stored, never the tokens.
+model Session {
+  id                String               @id @default(uuid(7)) @db.Uuid
+  userId            String               @map("user_id") @db.Uuid
+  app               AppType
+  refreshTokenHash  String               @unique @map("refresh_token_hash") @db.VarChar(64)
+  /// The refresh token before the last rotation. Seeing it again = stolen token.
+  previousTokenHash String?              @unique @map("previous_token_hash") @db.VarChar(64)
+  deviceId          String?              @map("device_id") @db.VarChar(100)
+  deviceName        String?              @map("device_name") @db.VarChar(100)
+  ip                String?              @db.VarChar(45)
+  userAgent         String?              @map("user_agent") @db.VarChar(500)
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt        DateTime             @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  expiresAt         DateTime             @map("expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime?            @map("revoked_at") @db.Timestamptz(3)
+  revokeReason      SessionRevokeReason? @map("revoke_reason")
+
+  user User @relation(fields: [userId], references: [id])
+
+  // A user's active sessions (one-device rule, "my devices", logout-all).
+  @@index([userId, revokedAt])
+  @@map("sessions")
 }

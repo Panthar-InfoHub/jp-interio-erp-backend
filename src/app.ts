@@ -1,4 +1,5 @@
 import express from "express";
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
 import { pinoHttp } from "pino-http";
@@ -45,6 +46,8 @@ app.use(
 // ---- Body parsing ----
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+// Reads cookies into req.cookies (the web console's refresh token).
+app.use(cookieParser());
 
 // ---- Health check: confirms the server AND the database are up ----
 app.get(

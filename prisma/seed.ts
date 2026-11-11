@@ -1,9 +1,11 @@
 /**
  * Fills a fresh database with the starting data: the 6 roles, the first Admin
- * (from .env) and the default settings. Run with `npm run db:seed`.
+ * (from .env), the default settings and the permission matrix. Run with `npm run db:seed`.
  *
  * Safe to run again: it only adds what is missing. Existing settings are never
  * overwritten (the Admin may have changed them), and no second Admin is created.
+ * Permissions are the exception: the table is made to match
+ * `src/config/permissionMatrix.ts` exactly (add, update, delete — DEC-049).
  * Everything runs in one transaction, and every change writes an audit row with
  * an empty actor ("system").
  */
@@ -12,6 +14,7 @@ import { z } from "zod";
 import { prisma } from "../src/lib/prisma.js";
 import { ROLE, ROLES } from "../src/config/roles.js";
 import { SETTINGS, type SettingKey } from "../src/config/settings.js";
+import { getPermissionRows } from "../src/config/permissionMatrix.js";
 import { recordAudit } from "../src/services/audit.service.js";
 import { normalizePhone } from "../src/utils/phone.js";
 
@@ -172,6 +175,65 @@ async function main(): Promise<void> {
         settingsAdded++;
       }
 
+      // ---- 4. Permissions: make the table match the code exactly (DEC-049) ----
+      const wanted = getPermissionRows();
+      const roleKey = new Map<number, string>(ROLES.map((role) => [role.id, role.key]));
+      const rowId = (row: { roleId: number; capability: string }) =>
+        `${roleKey.get(row.roleId) ?? row.roleId}:${row.capability}`;
+
+      const stored = await tx.permission.findMany();
+      const storedById = new Map(stored.map((row) => [rowId(row), row]));
+      const wantedIds = new Set(wanted.map(rowId));
+
+      let permissionsAdded = 0;
+      let permissionsUpdated = 0;
+      let permissionsDeleted = 0;
+
+      for (const row of wanted) {
+        const id = rowId(row);
+        const existing = storedById.get(id);
+
+        if (!existing) {
+          await tx.permission.create({ data: row });
+          await recordAudit(tx, {
+            actorId: null,
+            action: "permission.create",
+            entity: { type: "permission", id },
+            after: { ...row },
+          });
+          permissionsAdded++;
+        } else if (existing.scope !== row.scope) {
+          await tx.permission.update({
+            where: { roleId_capability: { roleId: row.roleId, capability: row.capability } },
+            data: { scope: row.scope },
+          });
+          await recordAudit(tx, {
+            actorId: null,
+            action: "permission.update",
+            entity: { type: "permission", id },
+            before: { scope: existing.scope },
+            after: { scope: row.scope },
+          });
+          permissionsUpdated++;
+        }
+      }
+
+      // Rows no longer in the code are removed; the audit log keeps the history.
+      for (const row of stored) {
+        const id = rowId(row);
+        if (wantedIds.has(id)) continue;
+        await tx.permission.delete({
+          where: { roleId_capability: { roleId: row.roleId, capability: row.capability } },
+        });
+        await recordAudit(tx, {
+          actorId: null,
+          action: "permission.delete",
+          entity: { type: "permission", id },
+          before: { roleId: row.roleId, capability: row.capability, scope: row.scope },
+        });
+        permissionsDeleted++;
+      }
+
       return {
         rolesAdded,
         rolesUpdated,
@@ -179,11 +241,15 @@ async function main(): Promise<void> {
         adminResult,
         settingsAdded,
         settingsExisting: keys.length - settingsAdded,
+        permissionsAdded,
+        permissionsUpdated,
+        permissionsDeleted,
+        permissionsTotal: wanted.length,
         warnings,
       };
     },
-    // Neon can be slow while it wakes up.
-    { maxWait: 15_000, timeout: 30_000 }
+    // Neon can be slow while it wakes up; the first permissions fill makes ~300 small queries.
+    { maxWait: 15_000, timeout: 180_000 }
   );
 
   console.log("✅ Seed finished");
@@ -194,6 +260,10 @@ async function main(): Promise<void> {
   console.log(`   Admin:    ${summary.adminResult}`);
   console.log(
     `   Settings: ${summary.settingsAdded} added, ${summary.settingsExisting} already there (kept as is)`
+  );
+  console.log(
+    `   Permissions: ${summary.permissionsAdded} added, ${summary.permissionsUpdated} updated, ` +
+      `${summary.permissionsDeleted} deleted (${summary.permissionsTotal} rows in the matrix)`
   );
   for (const warning of summary.warnings) console.warn(`⚠️  ${warning}`);
 }

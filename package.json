@@ -19,6 +19,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:dev-data": "tsx prisma/devData.ts",
     "db:studio": "prisma studio"
   },
   "keywords": [],

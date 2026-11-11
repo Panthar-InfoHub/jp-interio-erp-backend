@@ -92,6 +92,7 @@ The server checks these on start-up and stops with a clear message if something 
 | `npm run db:deploy` | Apply existing migrations (production / CI) |
 | `npm run db:generate` | Regenerate the Prisma client |
 | `npm run db:seed` | Add the starting data. Safe to run again (see section 7) |
+| `npm run db:dev-data` | **Dev only.** Add the pretend test company for manual testing (see section 7) |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
 
 **Before saying a task is done**, run `npm run typecheck` and `npm run format:check`. Both must pass.
@@ -107,7 +108,8 @@ backend/
 ├── prisma/
 │   ├── schema.prisma        Database tables (models and enums)
 │   ├── migrations/          SQL migrations (generated, never edit old ones)
-│   └── seed.ts              Starting data
+│   ├── seed.ts              Starting data (roles, first Admin, settings, permission matrix)
+│   └── devData.ts           Dev-only pretend company for manual testing
 ├── prisma.config.ts         Prisma settings (schema, migrations, seed, DIRECT_URL)
 └── src/
     ├── server.ts            Starts the HTTP server, graceful shutdown
@@ -115,7 +117,9 @@ backend/
     ├── config/
     │   ├── env.ts           Reads and checks .env
     │   ├── roles.ts         The 6 roles and ROLE.ADMIN etc. constants
-    │   ├── settings.ts      Master list of business settings
+    │   ├── settings.ts      Master list of business settings (with min/max)
+    │   ├── capabilities.ts  Every action name and the Sub-Admin areas that unlock it
+    │   ├── permissionMatrix.ts  Who may do which action, with which scope
     │   └── sensitiveFields.ts  Secret field names (hidden in logs and audit)
     ├── lib/
     │   ├── prisma.ts        The database client
@@ -126,12 +130,14 @@ backend/
     ├── middlewares/
     │   ├── requestContext.ts  Gives every request an ID (must run first)
     │   ├── auth.ts          requireAuth, requireApp, requireRole, getAuthUser
+    │   ├── permission.ts    requirePermission, getScope
     │   ├── validate.ts      Checks params / query / body with Zod
     │   ├── notFound.ts      404 for unknown routes
     │   └── errorHandler.ts  The ONLY place errors become responses
     ├── routes/              URL → controller (index.ts mounts every feature)
     ├── controllers/         Read the request, call a service, send the reply
     ├── services/            Business logic and database work
+    │                        (incl. permission, scope and hierarchy services: section 9)
     ├── validators/          Zod rules for each feature (+ common.ts)
     ├── utils/               apiResponse, errors, asyncHandler, pagination, phone
     └── generated/prisma/    Generated Prisma client (never edit, not committed)
@@ -304,9 +310,9 @@ import { getSetting } from "../services/settings.service.js";
 const minPoints = await getSetting("payout.min_points"); // → 100 (a number)
 ```
 
-- Every setting is listed in `src/config/settings.ts` with its type, default and description. **A new setting = one line there, then `npm run db:seed`.**
+- Every setting is listed in `src/config/settings.ts` with its type, default, description and allowed `min`/`max` (or `readOnly`). **A new setting = one entry there, then `npm run db:seed`.**
 - A misspelled key doesn't compile.
-- Values are cached for 60 seconds. After changing a setting, call `clearSettingsCache(key)`.
+- Values are cached for 60 seconds. `PATCH /api/settings/:key` clears the cache itself (section 9.4).
 - A missing or broken setting stops with a clear 500 `SETTING_ERROR`. It never quietly uses a default.
 
 ### Audit log: `recordAudit(tx, {...})`
@@ -352,11 +358,29 @@ They are always stored as **`91` + 10 digits**, with no `+` (for example `919876
 
 ### Seed (`npm run db:seed`)
 
-- Adds the 6 roles, the first Admin (from `.env`) and all settings, in one transaction.
+- Adds the 6 roles, the first Admin (from `.env`), all settings and the permission matrix, in one transaction.
 - **Safe to run again:** it only adds what is missing.
   - It never creates a second Admin.
   - It **never overwrites** a setting the Admin has changed.
+  - **Permissions are the exception:** the table is made to match `src/config/permissionMatrix.ts` exactly (section 9.1).
 - Each change writes an audit row with actor = system.
+
+### Dev test data (`npm run db:dev-data`)
+
+**Development only** (DEC-047). It adds a small pretend company so every role can be tried by hand, for example in Apidog. Run `npm run db:seed` first.
+
+- **Who it adds:**
+  - 2 zones: `TPUNE` and `TMUM`;
+  - 3 Sub-Admins: one with Partners & KYC, one with Rewards & Payouts, one with no areas;
+  - a Zonal Head per zone;
+  - 3 ASMs (Pune ASM 1 has 2 Sales Executives, Pune ASM 2 has none);
+  - 6 partners with mixed KYC states, one of them suspended.
+- **Phones `9000000101`–`9000000146`.** The script prints the full table. To log in as them, add the numbers to `TEST_PHONES` in `.env`; they use `TEST_OTP`.
+- **Safe:**
+  - it refuses to run with `NODE_ENV=production`;
+  - it only adds what is missing and never changes existing data;
+  - it runs in one transaction and writes audit rows.
+- **Easy to spot:** every name starts with "TEST".
 
 ---
 
@@ -372,6 +396,7 @@ Everyone, Admin included, logs in with **phone + OTP**. Each role may use only i
 | `POST /otp/verify` | No | `{ phone, app, otp, deviceId?, deviceName? }` → logs in. A new partner number creates the partner account |
 | `POST /refresh` | No | Swaps the refresh token for a new access token + new refresh token |
 | `GET /me` | Yes | Who am I |
+| `GET /me/permissions` | Yes | My actions and their scopes (section 9.4) |
 | `GET /sessions` | Yes | My logged-in devices (`isCurrent` marks this one) |
 | `DELETE /sessions/:id` | Yes | Log out one of my devices |
 | `POST /logout` | Yes | Log out this device |
@@ -410,7 +435,95 @@ const user = getAuthUser(req); // id, roleId, tier, zoneId, parentId, subAdminAr
 
 ---
 
-## 9. Rules every feature must follow
+## 9. Permissions, scope & settings (Module 3)
+
+Three questions, three tools. Use all three on every protected route that touches records.
+
+| Question | Tool | Refusal |
+|---|---|---|
+| **May you do this action at all?** | `requirePermission("kyc.verify")` | 403 |
+| **Which records can you see?** | `scopeForPartners(user, scope)`, `scopeForStaff(user, scope)` + `assertInScope` | 404 |
+| **May you manage this person?** | `assertCanManage(...)`, `assertCanCreate(...)` | 403 / 404 |
+
+### 9.1 Actions and the permission matrix
+
+- **Every action** (e.g. `kyc.verify`, `payouts.approve`) is listed in `src/config/capabilities.ts`, with the Sub-Admin areas that unlock it. A misspelled action doesn't compile.
+- **Who may do what** is in `src/config/permissionMatrix.ts` (one block per role, scope `full` / `scoped` / `own`). The full matrix with reasons: `docs/Permission Matrix.md`.
+- **`npm run db:seed` copies the matrix into the `permissions` table**: it adds, updates and deletes rows to match the file, with an audit row for each (DEC-049).
+- **To change a permission:** edit `permissionMatrix.ts`, then run `npm run db:seed`. A running server picks it up within 60 seconds (DEC-043, DEC-050).
+- **No row = refused** (default deny). Open doubts (D4.2, D4.5, D4.8, D11.11, D15.1, D17.2) have no row yet.
+
+### 9.2 Protecting a route
+
+```ts
+import { requireAuth, getAuthUser } from "../middlewares/auth.js";
+import { requirePermission, getScope } from "../middlewares/permission.js";
+import { scopeForPartners, assertInScope } from "../services/scope.service.js";
+
+router.get("/partners", requireAuth, requirePermission("partners.view"), controller.list);
+
+// in the service: every list and every get-by-ID goes through the scope filter
+const where = { AND: [scopeForPartners(user, scope), filtersFromTheQuery] };
+
+const partner = await prisma.user.findFirst({
+  where: { AND: [{ id }, scopeForPartners(user, scope)] },
+});
+assertInScope(partner, { user, entity: "partner", id }); // 404 if missing or outside scope
+```
+
+- `requirePermission` refuses with **403** and logs a warning; otherwise `getScope(req)` gives `full`, `scoped` or `own`.
+- **Sub-Admins** also need an area that unlocks the action. Their areas are read fresh on every request, so a change applies straight away.
+- **Who sees what** (DEC-051):
+
+  | Role | Partners | Staff |
+  |---|---|---|
+  | Admin | all | all |
+  | Sub-Admin | all (with the area) | all, through the staff picker only |
+  | Zonal Head | their zone | everyone in their zone, incl. themselves |
+  | ASM | partners they own | themselves + their Sales Executives |
+  | Sales Executive | partners currently assigned to them | none |
+  | Partner | only themselves | none |
+
+- When in doubt (no zone, unknown role) the filter matches **nothing**, never everything.
+
+### 9.3 "Only below me" (DEC-052)
+
+```ts
+import { assertCanManage, assertCanCreate } from "../services/hierarchy.service.js";
+
+const target = await assertCanManage(user, getScope(req), "staff", id); // or "partner"
+assertCanCreate(user, getScope(req), { roleId: ROLE.ASM, zoneId });
+```
+
+- You can only manage someone **strictly below** you **and** in your scope. **Never yourself.**
+- When adding someone: the role must be below yours; Zonal Head, ASM and SE can only add in their own zone.
+
+### 9.4 Endpoints
+
+| Method & path | Who | What it does |
+|---|---|---|
+| `GET /api/auth/me/permissions` | Anyone logged in | My actions and their scopes (for showing/hiding buttons) |
+| `GET /api/sub-admins` | Admin | All Sub-Admins with their areas |
+| `GET /api/sub-admins/:id/areas` | Admin | One Sub-Admin's areas, who gave each, when |
+| `PUT /api/sub-admins/:id/areas` | Admin | `{ areas: [...] }`, the full list; empty allowed; audited |
+| `GET /api/settings` | Admin | All settings with value, min, max, default, read-only |
+| `PATCH /api/settings/:key` | Admin | `{ value }`; checked against min/max; `otp.length` is read-only; audited |
+
+API docs: `docs/api/auth.openapi.yaml` and `docs/api/settings-permissions.openapi.yaml`.
+
+### 9.5 Dev-only test endpoints
+
+Mounted **only when `NODE_ENV` is not `production`** (`src/routes/dev.routes.ts`). Docs: `docs/api/dev.openapi.yaml`. Use them with the dev test data (section 7).
+
+| Path | Tests |
+|---|---|
+| `GET /api/dev/permission-check/:capability` | The permission guard |
+| `GET /api/dev/scope/partners[/:id]`, `/api/dev/scope/staff[/:id]` | The scope filter |
+| `GET /api/dev/can-manage/staff/:id`, `/can-manage/partners/:id`, `POST /api/dev/can-create` | The "only below me" rule |
+
+---
+
+## 10. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -426,24 +539,25 @@ These are short versions; the full list is R1–R14 in the build plan.
    - The logger hides the field names in `src/config/sensitiveFields.ts`.
    - **A new secret field must use one of those names, or be added to that list.**
 10. **Every list is paged** (section 6.5).
-11. **Every protected route uses `requireAuth`** (section 8.3).
+11. **Every protected route uses `requireAuth`** (section 8.3) **and `requirePermission`** (section 9.2).
 
 ---
 
-## 10. Adding a new feature (checklist)
+## 11. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
-2. Write Zod rules in `src/validators/<feature>.schema.ts`.
-3. Put the business logic in `src/services/<feature>.service.ts`, with an audit row for every change.
-4. Write a thin controller in `src/controllers/<feature>.controller.ts`.
-5. Create the routes in `src/routes/<feature>.routes.ts` and mount them in `src/routes/index.ts`.
-6. Add any new settings to `src/config/settings.ts` and run `npm run db:seed`.
-7. Document the endpoints in **Apidog** (there is no Swagger in this project: DEC-015).
-8. Run `npm run typecheck` and `npm run format:check`.
+2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
+3. Write Zod rules in `src/validators/<feature>.schema.ts`.
+4. Put the business logic in `src/services/<feature>.service.ts`, with an audit row for every change.
+5. Write a thin controller in `src/controllers/<feature>.controller.ts`.
+6. Create the routes in `src/routes/<feature>.routes.ts` and mount them in `src/routes/index.ts`.
+7. Add any new settings to `src/config/settings.ts` (with `min`/`max`) and run `npm run db:seed`.
+8. Document the endpoints in `docs/api/<module>.openapi.yaml` and import it into **Apidog** (there is no Swagger in this project: DEC-015, DEC-042).
+9. Run `npm run typecheck` and `npm run format:check`.
 
 ---
 
-## 11. Not in yet
+## 12. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

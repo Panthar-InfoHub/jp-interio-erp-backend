@@ -7,7 +7,7 @@ import { prisma } from "./lib/prisma.js";
 const server = http.createServer(app);
 
 server.listen(env.PORT, () => {
-  logger.info(`🚀 Server running on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+  logger.info(`Server running on http://localhost:${env.PORT} (${env.NODE_ENV})`);
 });
 
 // ---- Graceful shutdown ----

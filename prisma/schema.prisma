@@ -88,6 +88,18 @@ enum SessionRevokeReason {
   @@map("session_revoke_reason")
 }
 
+/// On whose records a role may do an action (DEC-048, docs/Permission Matrix.md).
+enum PermissionScope {
+  /// Every record, every zone (Admin; Sub-Admin with the area).
+  full
+  /// Records in their own zone (Zonal Head).
+  scoped
+  /// Own or assigned records; for an ASM also their Sales Executives' (ASM, Sales Executive, Partner).
+  own
+
+  @@map("permission_scope")
+}
+
 // ---- Models ----
 
 /// The 6 fixed roles. Seeded, never created from the API.
@@ -99,9 +111,28 @@ model Role {
   tier Int     @db.SmallInt
   app  AppType
 
-  users User[]
+  users       User[]
+  permissions Permission[]
 
   @@map("roles")
+}
+
+/// The permission matrix: one row = this role may do this action, on these records.
+/// No row = refused (default deny). Filled by the seed from code, no admin screen (DEC-043).
+/// Sub-Admin rows are also limited by their areas in `sub_admin_areas` (checked in code).
+model Permission {
+  roleId     Int             @map("role_id") @db.SmallInt
+  /// An action name from `src/config/capabilities.ts`, e.g. "kyc.verify". Text, not an enum (DEC-048).
+  capability String          @db.VarChar(60)
+  scope      PermissionScope
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([roleId, capability])
+  @@map("permissions")
 }
 
 model Zone {

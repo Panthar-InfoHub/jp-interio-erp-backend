@@ -14,6 +14,7 @@ router.post("/refresh", validate(refreshSchemas), authController.refresh);
 
 // My account (logged in)
 router.get("/me", requireAuth, authController.me);
+router.get("/me/permissions", requireAuth, authController.myPermissions);
 router.get("/sessions", requireAuth, authController.listSessions);
 router.delete(
   "/sessions/:id",

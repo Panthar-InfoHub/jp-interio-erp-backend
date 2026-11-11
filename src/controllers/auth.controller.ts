@@ -2,6 +2,7 @@ import type { ValidatedRequest } from "../middlewares/validate.js";
 import { getRequestContext } from "../lib/requestContext.js";
 import { getAuthUser } from "../middlewares/auth.js";
 import * as authService from "../services/auth.service.js";
+import * as permissionService from "../services/permission.service.js";
 import * as sessionService from "../services/session.service.js";
 import type { idParams } from "../validators/common.js";
 import { sendSuccess } from "../utils/apiResponse.js";
@@ -95,6 +96,19 @@ export const refresh = asyncHandler<ValidatedRequest<typeof refreshSchemas>>(asy
 /** GET /api/auth/me — who am I. */
 export const me = asyncHandler(async (req, res) => {
   sendSuccess(res, 200, await sessionService.getMe(getAuthUser(req)));
+});
+
+/**
+ * GET /api/auth/me/permissions — the actions I may do, each with its scope (DEC-050).
+ * For showing or hiding buttons only; the server still checks every request.
+ */
+export const myPermissions = asyncHandler(async (req, res) => {
+  const user = getAuthUser(req);
+  sendSuccess(res, 200, {
+    role: user.roleKey,
+    subAdminAreas: user.subAdminAreas,
+    permissions: await permissionService.listMyPermissions(user),
+  });
 });
 
 /** GET /api/auth/sessions — my open devices; `isCurrent` marks this one. */

@@ -451,7 +451,7 @@ Three questions, three tools. Use all three on every protected route that touche
 - **Who may do what** is in `src/config/permissionMatrix.ts` (one block per role, scope `full` / `scoped` / `own`). The full matrix with reasons: `docs/Permission Matrix.md`.
 - **`npm run db:seed` copies the matrix into the `permissions` table**: it adds, updates and deletes rows to match the file, with an audit row for each (DEC-049).
 - **To change a permission:** edit `permissionMatrix.ts`, then run `npm run db:seed`. A running server picks it up within 60 seconds (DEC-043, DEC-050).
-- **No row = refused** (default deny). Open doubts (D4.2, D4.5, D4.8, D11.11, D15.1, D17.2) have no row yet.
+- **No row = refused** (default deny). Open doubts (D11.11, D15.1, D17.2) have no row yet.
 
 ### 9.2 Protecting a route
 
@@ -523,7 +523,51 @@ Mounted **only when `NODE_ENV` is not `production`** (`src/routes/dev.routes.ts`
 
 ---
 
-## 10. Rules every feature must follow
+## 10. Zones, staff & the org tree (Module 4)
+
+### 10.1 The hierarchy
+
+```
+Admin ─┬─ Sub-Admins (no zone; work by areas)
+       └─ Zonal Head (exactly one per zone)
+            └─ ASM (manager = the zone's Zonal Head, set automatically)
+                 ├─ Sales Executive (same zone as their ASM)
+                 └─ Partner (owned by the ASM; optionally looked after by one of the ASM's SEs)
+```
+
+- **Nobody is ever deleted.** People are deactivated; zones are made inactive.
+- **Every change** is audited and runs in one transaction. Moving or deactivating someone **logs them out** (`revokeAllSessions`).
+- **Moves only change the future.** Old records keep their old manager and zone.
+- **"Reassign first":** an ASM can't be deactivated or moved to another zone while they have Sales Executives or partners; a Zonal Head can't be deactivated while in charge of a zone (DEC-057, DEC-059, DEC-066).
+- Leads, tasks and requests don't exist yet. `TODO(Modules 11–13)` comments in `user.service.ts` and `team.service.ts` mark where they join the hand-back and block rules.
+
+### 10.2 Endpoints
+
+| Method & path | Who | What it does |
+|---|---|---|
+| `GET /api/zones`, `GET /api/zones/:id` | Any staff | Zones with their Zonal Head and headcounts |
+| `POST /api/zones`, `PATCH /api/zones/:id` | Admin | Create / edit (code in CAPITALS, code and name unique, code locked once used) |
+| `POST /api/zones/:id/deactivate`, `/reactivate` | Admin | Only an empty zone can be deactivated |
+| `POST /api/zones/:id/zonal-head` | Admin | Put a zoneless Zonal Head in charge; ASMs follow; the old one keeps no zone |
+| `POST /api/users` | Admin, Zonal Head, ASM | Add staff (role must be below yours; manager and zone filled in) |
+| `GET /api/users`, `GET /api/users/:id` | Admin, Zonal Head, ASM | Scoped list (filters) and detail (with team counts) |
+| `GET /api/users/picker` | Admin, Tasks / Leads & Requests Sub-Admins | Active field staff for "assign to" dropdowns |
+| `PATCH /api/users/:id` | Admin, Zonal Head | Name, phone, email (new phone → logged out) |
+| `PATCH /api/users/me` | Any staff | My own name and email (never the phone) |
+| `POST /api/users/:id/deactivate`, `/reactivate` | By role (see DEC-065) | SE → partners go back to the ASM |
+| `POST /api/users/:id/transfer` | SE: Zonal Head / Admin; ASM: Admin | `{ asmId }` or `{ zoneId }` |
+| `GET /api/team` | ASM | My Sales Executives with partner counts |
+| `POST /api/partners/:id/assign-sales-executive`, `/unassign-sales-executive` | ASM | Who looks after the partner |
+| `POST /api/partners/:id/transfer` | Zonal Head, Admin | Move a partner to another ASM (SE cleared) |
+| `GET /api/org/tree` | Admin, Zonal Head, ASM | The hierarchy as a tree |
+
+- **Permission by target:** add, deactivate and transfer pick the action from the role of the person involved (e.g. `sales_exec.deactivate` for an SE, `users.deactivate` for an ASM), so those checks live in `user.service.ts` (`loadForAction`), not in the route.
+- API docs: `docs/api/zones.openapi.yaml`, `docs/api/users.openapi.yaml`, `docs/api/partners.openapi.yaml`.
+- The full manual test plan: `docs/Module 4 complete testing.md`.
+
+---
+
+## 11. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -543,7 +587,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 11. Adding a new feature (checklist)
+## 12. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -557,7 +601,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 12. Not in yet
+## 13. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

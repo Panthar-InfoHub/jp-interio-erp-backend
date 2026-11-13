@@ -140,7 +140,7 @@ export function requireRole(...roleIds: RoleId[]): RequestHandler {
  * The logged-in user, for controllers behind `requireAuth`.
  * Throws if `requireAuth` was forgotten on the route, instead of failing silently.
  */
-export function getAuthUser(req: Request): AuthUser {
+export function getAuthUser(req: Pick<Request, "user">): AuthUser {
   if (!req.user) throw new UnauthorizedError("Please log in.");
   return req.user;
 }

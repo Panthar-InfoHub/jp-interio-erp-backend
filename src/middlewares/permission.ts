@@ -56,7 +56,7 @@ export function requirePermission(capability: Capability): RequestHandler {
  * The scope set by `requirePermission`, for controllers and services.
  * Throws if `requirePermission` was forgotten on the route, instead of failing silently.
  */
-export function getScope(req: Request): PermissionScope {
+export function getScope(req: Pick<Request, "scope">): PermissionScope {
   if (!req.scope) throw new Error("getScope() used on a route without requirePermission()");
   return req.scope;
 }

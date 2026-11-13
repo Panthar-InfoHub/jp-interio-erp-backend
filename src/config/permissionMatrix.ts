@@ -12,8 +12,10 @@ import { ROLE, type RoleId } from "./roles.js";
  * (for an ASM also their Sales Executives' records).
  *
  * Boxes still waiting on a doubt have NO entry, so they are refused until decided:
- * D4.2 (ASM deactivates own SE), D4.5 (transfers across zones), D4.8 (Sub-Admin and SEs),
  * D11.11 (ASM takes back a request), D15.1 (field staff raise tickets), D17.2 (reverse scan).
+ * Answered: D4.2 → ASM row below (DEC-056); D4.8 → "no", so no Sub-Admin staff rows (DEC-058);
+ * D4.5 → across zones is Admin only (DEC-057): no extra row, the services enforce it (a
+ * Zonal Head's "scoped" transfer only finds people in their own zone).
  */
 type RoleMatrix = Partial<Record<Capability, PermissionScope>>;
 
@@ -114,6 +116,8 @@ const ZONAL_HEAD: RoleMatrix = {
 const ASM: RoleMatrix = {
   "users.view": "own",
   "sales_exec.create": "own",
+  // D4.2 → DEC-056: an ASM can switch their own Sales Executives off and on.
+  "sales_exec.deactivate": "own",
   "team.assign_partners": "own",
   "partners.view": "own",
   "partners.onboard": "own",

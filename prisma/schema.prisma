@@ -65,6 +65,52 @@ enum KycState {
   @@map("kyc_state")
 }
 
+/// The next onboarding step to show; the partner or staff member resumes here (DEC-074, DEC-079).
+enum OnboardingStep {
+  /// Name, email, address, city, state, pincode, zone, partner type, business name (DEC-087, DEC-088).
+  basic_info
+  /// NOT USED any more: the type is picked on the basic info page (DEC-087, DEC-088).
+  /// Left in place for now; remove in a later migration.
+  partner_type
+  /// Dealer / OEM only: firm name, GST number + certificate, director's DOB, anniversary, spouse.
+  firm_details
+  /// At least one bank account or UPI ID (DEC-074, DEC-076).
+  payout_account
+  /// PAN number + photo, Aadhaar number + one photo (DEC-081, DEC-082).
+  kyc_documents
+  /// Sent for approval; partner type is now locked.
+  submitted
+
+  @@map("onboarding_step")
+}
+
+enum KycDocType {
+  pan
+  aadhaar
+  /// Dealer / OEM only: GST number + certificate photo (DEC-080).
+  gst
+
+  @@map("kyc_doc_type")
+}
+
+enum PayoutMethod {
+  bank
+  upi
+
+  @@map("payout_method")
+}
+
+/// Each step in a partner's review history (insert-only, never overwritten).
+enum KycReviewAction {
+  submitted
+  approved
+  rejected
+  /// Admin undid a rejection (DEC-074); the partner goes back to pending.
+  rejection_undone
+
+  @@map("kyc_review_action")
+}
+
 enum SettingType {
   int
   string
@@ -158,11 +204,16 @@ model User {
   /// Empty for a new partner until onboarding (Module 5); staff always have one (DEC-038).
   name     String?    @db.VarChar(100)
   phone    String     @unique @db.VarChar(15)
-  email    String?    @unique @db.VarChar(255)
+  /// Not unique: many partners may share an email (DEC-088). Staff emails are kept
+  /// unique among staff in code (user.service.ts).
+  email    String?    @db.VarChar(255)
   roleId   Int        @map("role_id") @db.SmallInt
   /// The manager above this user. Empty for the Admin.
+  /// For a partner: the owning ASM. Empty for a self sign-up until the Zonal Head
+  /// picks the ASM while approving (DEC-074).
   parentId String?    @map("parent_id") @db.Uuid
   /// Empty for Admin and Sub-Admins; set for Zonal Heads and everyone below.
+  /// For a self sign-up partner: the zone they picked on the basic info page (DEC-080).
   zoneId   String?    @map("zone_id") @db.Uuid
   status   UserStatus @default(active)
 
@@ -174,14 +225,20 @@ model User {
   children User[] @relation("UserParent")
   zone     Zone?  @relation(fields: [zoneId], references: [id])
 
-  subAdminAreas        SubAdminAreaGrant[] @relation("GrantHolder")
-  subAdminAreasGranted SubAdminAreaGrant[] @relation("GrantGiver")
-  partnerProfile       PartnerProfile?     @relation("ProfileOwner")
-  assignedPartners     PartnerProfile[]    @relation("ProfileSalesExecutive")
-  onboardedPartners    PartnerProfile[]    @relation("ProfileOnboardedBy")
-  settingsUpdated      Setting[]
-  auditEntries         AuditLog[]
-  sessions             Session[]
+  subAdminAreas         SubAdminAreaGrant[] @relation("GrantHolder")
+  subAdminAreasGranted  SubAdminAreaGrant[] @relation("GrantGiver")
+  partnerProfile        PartnerProfile?     @relation("ProfileOwner")
+  assignedPartners      PartnerProfile[]    @relation("ProfileSalesExecutive")
+  onboardedPartners     PartnerProfile[]    @relation("ProfileOnboardedBy")
+  settingsUpdated       Setting[]
+  auditEntries          AuditLog[]
+  sessions              Session[]
+  kycDocumentsUploaded  KycDocument[]       @relation("DocUploadedBy")
+  payoutAccountsAdded   PayoutAccount[]     @relation("PayoutAddedBy")
+  payoutAccountsEdited  PayoutAccount[]     @relation("PayoutUpdatedBy")
+  payoutAccountsRemoved PayoutAccount[]     @relation("PayoutRemovedBy")
+  kycReviewsDone        KycReview[]         @relation("ReviewActor")
+  kycReviewsAsmPicked   KycReview[]         @relation("ReviewAssignedAsm")
 
   @@index([roleId])
   @@index([parentId])
@@ -207,9 +264,12 @@ model SubAdminAreaGrant {
 
 /// Extra details for partners only. Profile fields stay empty until the
 /// partner (or field staff) fills them in during onboarding (Module 5).
+/// Name and email live on `users`; the zone is `users.zone_id`; the owning ASM is `users.parent_id`.
 model PartnerProfile {
   userId           String       @id @map("user_id") @db.Uuid
+  /// Firm name: required for dealer / OEM, optional for carpenter (DEC-080, DEC-081).
   businessName     String?      @map("business_name") @db.VarChar(150)
+  /// Can change while a draft; locked once submitted (DEC-080).
   partnerType      PartnerType? @map("partner_type")
   address          String?      @db.VarChar(500)
   city             String?      @db.VarChar(100)
@@ -218,7 +278,28 @@ model PartnerProfile {
   kycState         KycState     @default(not_submitted) @map("kyc_state")
   /// Optional; must report to the partner's owning ASM (checked in the service).
   salesExecutiveId String?      @map("sales_executive_id") @db.Uuid
+  /// The ASM or Sales Executive who started a field onboarding. Only they can finish
+  /// the draft (DEC-075). Empty for a self sign-up.
   onboardedById    String?      @map("onboarded_by") @db.Uuid
+
+  // Dealer / OEM: director or proprietor details, all optional, one person only (DEC-080).
+  ownerDob             DateTime? @map("owner_dob") @db.Date
+  ownerAnniversaryDate DateTime? @map("owner_anniversary_date") @db.Date
+  ownerSpouseName      String?   @map("owner_spouse_name") @db.VarChar(100)
+
+  // Onboarding progress (drafts, DEC-074).
+  onboardingStep      OnboardingStep @default(basic_info) @map("onboarding_step")
+  /// When the draft began; unfinished drafts older than one month are removed (DEC-074, DEC-075).
+  onboardingStartedAt DateTime       @default(now()) @map("onboarding_started_at") @db.Timestamptz(3)
+  submittedAt         DateTime?      @map("submitted_at") @db.Timestamptz(3)
+  /// When the latest approve or reject happened. Full history is in `kyc_reviews`.
+  reviewedAt          DateTime?      @map("reviewed_at") @db.Timestamptz(3)
+  /// Set when the daily clean-up retired this unfinished onboarding (DEC-093): the account
+  /// is switched off, its phone released, its documents and payout rows deleted.
+  /// Retired drafts are hidden from every list.
+  draftRemovedAt      DateTime?      @map("draft_removed_at") @db.Timestamptz(3)
+  /// Latest rejection reason, shown to the partner (DEC-073, DEC-074).
+  rejectionReason     String?        @map("rejection_reason") @db.VarChar(1000)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -227,9 +308,104 @@ model PartnerProfile {
   salesExecutive User? @relation("ProfileSalesExecutive", fields: [salesExecutiveId], references: [id])
   onboardedBy    User? @relation("ProfileOnboardedBy", fields: [onboardedById], references: [id])
 
+  kycDocuments   KycDocument[]
+  payoutAccounts PayoutAccount[]
+  kycReviews     KycReview[]
+
   @@index([kycState])
   @@index([salesExecutiveId])
+  // "My unfinished onboardings" list and the one-month draft clean-up.
+  @@index([onboardedById, onboardingStep])
+  @@index([onboardingStep, onboardingStartedAt])
   @@map("partner_profiles")
+}
+
+/// A partner's KYC documents: PAN, Aadhaar and (dealer / OEM) GST.
+/// The number is stored encrypted (AES-256-GCM), plus a hash for duplicate checks
+/// and the last 4 characters for display. Never log the number (R14).
+/// Replacing a document keeps the old row (`replaced_at` set); it is never overwritten.
+model KycDocument {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  partnerId       String     @map("partner_id") @db.Uuid
+  docType         KycDocType @map("doc_type")
+  numberEncrypted String     @map("number_encrypted")
+  /// Keyed hash of the cleaned number. Duplicates are blocked across all
+  /// accounts, rejected ones included (DEC-074, DEC-077, DEC-081); checked in the service.
+  numberHash      String     @map("number_hash") @db.VarChar(64)
+  numberLast4     String     @map("number_last4") @db.VarChar(4)
+  /// Complete public URL of the photo / PDF in the R2 bucket (DEC-084, DEC-085).
+  fileUrl         String     @map("file_url") @db.VarChar(1000)
+  fileMimeType    String     @map("file_mime_type") @db.VarChar(100)
+  fileSizeBytes   Int        @map("file_size_bytes")
+  uploadedById    String     @map("uploaded_by") @db.Uuid
+  /// Set when a newer document of the same type replaces this one.
+  replacedAt      DateTime?  @map("replaced_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  partner    PartnerProfile @relation(fields: [partnerId], references: [userId])
+  uploadedBy User           @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([partnerId, docType])
+  @@index([docType, numberHash])
+  @@map("kyc_documents")
+}
+
+/// Where a partner's cash-outs go: bank accounts and UPI IDs (each counts as one account).
+/// At least one, no maximum, one default (DEC-076, DEC-078). No approval needed.
+/// Removing sets `removed_at`; rows are never deleted.
+model PayoutAccount {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  partnerId      String       @map("partner_id") @db.Uuid
+  method         PayoutMethod
+  /// Bank: account holder's name. UPI: the name shown for the UPI ID, if given.
+  holderName     String?      @map("holder_name") @db.VarChar(150)
+  /// Bank account number or UPI ID, encrypted. Never log it (R14).
+  valueEncrypted String       @map("value_encrypted")
+  /// Keyed hash for duplicate checks across all accounts (DEC-073, DEC-074).
+  valueHash      String       @map("value_hash") @db.VarChar(64)
+  valueLast4     String       @map("value_last4") @db.VarChar(4)
+  /// Bank only.
+  ifsc           String?      @db.VarChar(11)
+  bankName       String?      @map("bank_name") @db.VarChar(150)
+  isDefault      Boolean      @default(false) @map("is_default")
+  addedById      String       @map("added_by") @db.Uuid
+  updatedById    String?      @map("updated_by") @db.Uuid
+  removedAt      DateTime?    @map("removed_at") @db.Timestamptz(3)
+  removedById    String?      @map("removed_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  partner   PartnerProfile @relation(fields: [partnerId], references: [userId])
+  addedBy   User           @relation("PayoutAddedBy", fields: [addedById], references: [id])
+  updatedBy User?          @relation("PayoutUpdatedBy", fields: [updatedById], references: [id])
+  removedBy User?          @relation("PayoutRemovedBy", fields: [removedById], references: [id])
+
+  @@index([partnerId, removedAt])
+  @@index([method, valueHash])
+  @@map("payout_accounts")
+}
+
+/// Insert-only history of a partner's verification: submit, approve, reject, undo.
+model KycReview {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  partnerId     String          @map("partner_id") @db.Uuid
+  action        KycReviewAction
+  /// Required for `rejected` (free text, DEC-073); optional otherwise.
+  reason        String?         @db.VarChar(1000)
+  actorId       String          @map("actor_id") @db.Uuid
+  /// For `approved` on a self sign-up: the ASM the Zonal Head picked (DEC-074).
+  assignedAsmId String?         @map("assigned_asm_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  partner     PartnerProfile @relation(fields: [partnerId], references: [userId])
+  actor       User           @relation("ReviewActor", fields: [actorId], references: [id])
+  assignedAsm User?          @relation("ReviewAssignedAsm", fields: [assignedAsmId], references: [id])
+
+  @@index([partnerId, createdAt])
+  @@map("kyc_reviews")
 }
 
 /// Business values the Admin can change without a code change.

@@ -4,7 +4,20 @@
  */
 
 /** Never kept anywhere: logs and the audit log show "[REDACTED]". */
-export const SECRET_FIELDS = ["password", "token", "accessToken", "refreshToken", "otp"] as const;
+export const SECRET_FIELDS = [
+  "password",
+  "token",
+  "accessToken",
+  "refreshToken",
+  "otp",
+  // Module 5: stored forms of KYC / payout numbers (lib/crypto/sensitiveData.ts).
+  "numberEncrypted",
+  "numberHash",
+  "valueEncrypted",
+  "valueHash",
+  // Signed upload links grant write access for 5 minutes.
+  "uploadUrl",
+] as const;
 
 /**
  * ID-type numbers. The audit log keeps only the last 4 characters (XXXXXXXX1234)
@@ -17,4 +30,8 @@ export const MASKED_FIELDS = [
   "panNumber",
   "accountNumber",
   "upiId",
+  // Module 5 request / response field names.
+  "gst",
+  "gstNumber",
+  "docNumber",
 ] as const;

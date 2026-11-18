@@ -1,9 +1,13 @@
 import { ROLE } from "../config/roles.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import type { PermissionScope } from "../generated/prisma/enums.js";
 import { prisma } from "../lib/prisma.js";
 import type { AuthUser } from "../middlewares/auth.js";
 import { ConflictError } from "../utils/errors.js";
+import { pageMeta, toPrismaOrderBy, toPrismaPaging } from "../utils/pagination.js";
+import type { ListPartnersQuery } from "../validators/partner.schema.js";
 import { recordAudit } from "./audit.service.js";
+import { buildPartnerDetail } from "./partnerDetail.service.js";
 import { assertInScope, scopeForPartners, scopeForStaff } from "./scope.service.js";
 
 /**
@@ -13,6 +17,114 @@ import { assertInScope, scopeForPartners, scopeForStaff } from "./scope.service.
  * - Move to another ASM: Zonal Head (own zone) or Admin (any zone). Clears the SE.
  * - Active and suspended partners only. The partner is not logged out.
  */
+
+// ---- Partner list and Partner 360 (Module 5 T13; DEC-083, DEC-093, DEC-105) ----
+
+/**
+ * GET /partners — VERIFIED partners only (DEC-105), within `partners.view` scope:
+ * SE assigned, ASM own, ZH zone, Partners & KYC Sub-Admin and Admin all.
+ * Pending / rejected partners live in the KYC queue; unfinished ones in "my drafts".
+ */
+export async function listPartners(me: AuthUser, scope: PermissionScope, query: ListPartnersQuery) {
+  const where: Prisma.UserWhereInput = {
+    AND: [
+      scopeForPartners(me, scope),
+      { partnerProfile: { is: { kycState: "verified", draftRemovedAt: null } } },
+      {
+        ...(query.zoneId && { zoneId: query.zoneId }),
+        ...(query.asmId && { parentId: query.asmId }),
+        ...(query.status && { status: query.status }),
+      },
+      ...(query.partnerType
+        ? [{ partnerProfile: { is: { partnerType: query.partnerType } } }]
+        : []),
+      ...(query.salesExecutiveId
+        ? [{ partnerProfile: { is: { salesExecutiveId: query.salesExecutiveId } } }]
+        : []),
+      ...(query.search
+        ? [
+            {
+              OR: [
+                { name: { contains: query.search, mode: "insensitive" as const } },
+                { phone: { contains: query.search } },
+                {
+                  partnerProfile: {
+                    is: { businessName: { contains: query.search, mode: "insensitive" as const } },
+                  },
+                },
+              ],
+            },
+          ]
+        : []),
+    ],
+  };
+
+  const [rows, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        status: true,
+        createdAt: true,
+        zone: { select: { id: true, name: true, code: true } },
+        parent: { select: { id: true, name: true } },
+        partnerProfile: {
+          select: {
+            partnerType: true,
+            businessName: true,
+            kycState: true,
+            reviewedAt: true,
+            salesExecutive: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: toPrismaOrderBy(query.sort),
+      ...toPrismaPaging(query.page, query.limit),
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    phone: row.phone,
+    status: row.status,
+    partnerType: row.partnerProfile?.partnerType ?? null,
+    businessName: row.partnerProfile?.businessName ?? null,
+    kycState: row.partnerProfile?.kycState ?? null,
+    zone: row.zone,
+    asm: row.parent,
+    salesExecutive: row.partnerProfile?.salesExecutive ?? null,
+    joinedAt: row.createdAt,
+    verifiedAt: row.partnerProfile?.reviewedAt ?? null,
+  }));
+
+  return { items, meta: pageMeta(query.page, query.limit, total) };
+}
+
+/**
+ * GET /partners/:id — Partner 360: ANY state (unfinished, pending, verified, rejected),
+ * within `partners.view` scope (DEC-105). Retired drafts → 404 (DEC-093).
+ * Later modules add wallet, scans, payouts and requests to this reply.
+ */
+export async function getPartner360(me: AuthUser, scope: PermissionScope, id: string) {
+  assertInScope(
+    await prisma.user.findFirst({
+      where: {
+        AND: [
+          { id },
+          scopeForPartners(me, scope),
+          { partnerProfile: { is: { draftRemovedAt: null } } },
+        ],
+      },
+      select: { id: true },
+    }),
+    { user: me, entity: "partner", id }
+  );
+  return buildPartnerDetail(id);
+}
 
 /** What a partner looks like in these replies. */
 const PARTNER_FIELDS = {

@@ -78,6 +78,14 @@ export const SETTINGS = {
     min: 7,
     max: 180,
   },
+  // Unfinished onboardings are retired after this many days (DEC-074, DEC-093).
+  "onboarding.draft_days": {
+    type: "int",
+    default: 30,
+    description: "Days an unfinished partner onboarding is kept before it is removed.",
+    min: 1,
+    max: 365,
+  },
 } as const satisfies Record<string, SettingDefinition>;
 
 export type SettingKey = keyof typeof SETTINGS;

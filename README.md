@@ -72,6 +72,11 @@ Check that it works: open **http://localhost:8080/health**. You should see `"sta
 | `SEED_ADMIN_NAME` | For seed | Name of the first Admin |
 | `SEED_ADMIN_PHONE` | For seed | First Admin's 10-digit Indian mobile number. Stored as `91XXXXXXXXXX` |
 | `SEED_ADMIN_EMAIL` | No | First Admin's email (optional) |
+| `KYC_ENCRYPTION_KEY` | **Yes** | 32 random bytes in base64. Locks PAN / Aadhaar / GST / bank / UPI numbers and makes their fingerprints. **Losing or changing it makes stored numbers unreadable.** Keep a safe copy; use a different key in production. The command is in `.env.example` |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | **Yes** | Cloudflare R2 account and API token ("Object Read & Write" on this bucket only). **Never commit the keys** |
+| `R2_BUCKET` | **Yes** | The R2 bucket name (one public bucket, DEC-084, DEC-085) |
+| `R2_PUBLIC_BASE_URL` | **Yes** | The bucket's public link (r2.dev or custom domain), no slash at the end |
+| `STORAGE_PREFIX` | **Yes** | Folder in front of every file: `dev` on development machines, `prod` in production (DEC-086) |
 
 The server checks these on start-up and stops with a clear message if something is missing.
 **Never commit `.env`.**
@@ -94,6 +99,7 @@ The server checks these on start-up and stops with a clear message if something 
 | `npm run db:seed` | Add the starting data. Safe to run again (see section 7) |
 | `npm run db:dev-data` | **Dev only.** Add the pretend test company for manual testing (see section 7) |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
+| `npm run job:clean-drafts` | Run the unfinished-onboarding clean-up now (it also runs daily inside the server, section 11) |
 
 **Before saying a task is done**, run `npm run typecheck` and `npm run format:check`. Both must pass.
 
@@ -472,6 +478,13 @@ assertInScope(partner, { user, entity: "partner", id }); // 404 if missing or ou
 ```
 
 - `requirePermission` refuses with **403** and logs a warning; otherwise `getScope(req)` gives `full`, `scoped` or `own`.
+- **Partner features that need a verified partner** (catalog, scan, cash-out, requests) also add `requireVerifiedPartner` (`src/middlewares/verifiedPartner.ts`, Module 5) right after `requireAuth`:
+
+  ```ts
+  router.post("/scan", requireAuth, requireVerifiedPartner, requirePermission("scans.create"), ...)
+  ```
+
+  Unfinished / pending / rejected → **403 `PARTNER_NOT_VERIFIED`** (with `details.kycState`); staff → 403. Suspended partners are already stopped by `requireAuth`.
 - **Sub-Admins** also need an area that unlocks the action. Their areas are read fresh on every request, so a change applies straight away.
 - **Who sees what** (DEC-051):
 
@@ -567,7 +580,50 @@ Admin ─┬─ Sub-Admins (no zone; work by areas)
 
 ---
 
-## 11. Rules every feature must follow
+## 11. Partner onboarding & KYC (Module 5)
+
+### 11.1 How a partner becomes verified
+
+```
+Carpenter:     basic info → payout account → KYC → submit
+Dealer / OEM:  basic info → firm details → payout account → KYC → submit
+                                                                  │
+            pending ──approve──▶ verified        (self sign-up: the checker picks an ASM of the zone)
+               └──reject (reason)──▶ rejected ──undo (Admin)──▶ pending
+```
+
+- **Two ways in:** the partner signs up in the Partner App (picks their zone), or an ASM / Sales Executive starts it in the Field Sales App with the partner's phone + OTP. Either one may finish the steps (DEC-091).
+- **Forward only** (DEC-089): a step is accepted only when it is the current one. The partner type locks after basic info.
+- **Who checks:** the Zonal Head of the zone, the Partners & KYC Sub-Admin, the Admin. Reject is final; only the Admin can undo it.
+- **Unfinished onboardings** are retired after `onboarding.draft_days` days (setting, default 30): account switched off, phone and numbers freed, photos deleted (DEC-093). Runs daily inside the server (`src/jobs/draftCleanup.job.ts`) and by hand with `npm run job:clean-drafts`. The Admin can also retire one draft now (`POST /api/partners/:id/remove-draft`).
+
+### 11.2 Sensitive numbers and files
+
+- **PAN, Aadhaar, GST, bank account, UPI ID** are cleaned, format-checked and stored **encrypted** (AES-256-GCM) with a **fingerprint** (HMAC) for duplicate checks and the **last 4** for display (`src/lib/crypto/sensitiveData.ts`). Staff who can see the partner get the full numbers (DEC-083).
+- **Duplicates are blocked** across all partners, ever (`src/services/kycDuplicate.service.ts`). A number is reserved as soon as its step is saved (DEC-095). Each check takes a short database lock on that number, so two people can't register it at the same second.
+- **Files go straight from the app to Cloudflare R2:** `POST /api/uploads/upload-link` gives a 5-minute signed link, the app uploads with `PUT`, then sends the file's public URL in the step. The server checks the file is really there, the right type and size (`src/services/storage.service.ts`). One public bucket; random file names (DEC-084 – DEC-086).
+
+### 11.3 Endpoints
+
+| Method & path | Who | What it does |
+|---|---|---|
+| `POST /api/uploads/upload-link` | Partner, ASM, SE | A signed link to upload one KYC photo / PDF |
+| `GET /api/partner/onboarding`, `/zones`; `PUT /basic-info`, `/firm-details`, `/kyc`; `POST /payout-account`, `/submit` | Partner | Self sign-up steps |
+| `POST /api/field/onboarding/start`, `/verify`; `GET /drafts`, `/:partnerId`; the same steps under `/:partnerId/...` | ASM, SE | Field onboarding and "my drafts" |
+| `GET /api/partner/status` | Partner | Which screen to show and whom to contact |
+| `PATCH /api/partner/profile`; `/api/partner/payout-accounts` (list, add, edit, set-default, remove) | Verified partner | My details and my bank / UPI accounts |
+| `GET /api/kyc/queue`, `GET /api/kyc/:id`; `POST /:id/approve`, `/:id/reject`, `/:id/undo-rejection` | ZH, Sub-Admin, Admin (undo: Admin) | The KYC queue |
+| `GET /api/partners`, `GET /api/partners/:id` | SE, ASM, ZH, Sub-Admin, Admin | Partner list (verified only) and Partner 360 (any state) |
+| `PATCH /api/partners/:id/profile`, `POST /:id/change-phone` | SE, ASM, ZH, Sub-Admin, Admin | Edit a verified partner; change their phone (no OTP, logged out) |
+| `/api/partners/:id/payout-accounts` (list, add, edit, set-default, remove) | SE, ASM, ZH, Sub-Admin, Admin | A verified partner's bank / UPI accounts |
+| `POST /api/partners/number-lookup`, `POST /:id/remove-draft` | Admin | Who holds a number; retire one draft now |
+
+- API docs: `docs/api/uploads.openapi.yaml`, `onboarding.openapi.yaml`, `field-onboarding.openapi.yaml`, `kyc.openapi.yaml`, `partners.openapi.yaml`.
+- The full manual test plan: `docs/testing/Module 5 complete testing.md`.
+
+---
+
+## 12. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -587,7 +643,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 12. Adding a new feature (checklist)
+## 13. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -601,7 +657,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 13. Not in yet
+## 14. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

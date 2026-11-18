@@ -85,11 +85,18 @@ export const CAPABILITIES = {
     subAdmin: ["partners"],
     description: "Suspend or reactivate a partner",
   },
-  "kyc.verify": { subAdmin: ["partners"], description: "KYC queue; approve or reject" },
-  "kyc.reveal": {
+  "partners.payout_accounts": {
     subAdmin: ["partners"],
-    description: "Show a full Aadhaar, PAN or bank number (audited)",
+    description:
+      "See, add, edit, remove a partner's bank / UPI accounts; set the default (DEC-101)",
   },
+  "partners.remove_draft": {
+    subAdmin: "never",
+    description: "Find who holds a KYC / bank number; remove an unfinished draft now (DEC-097)",
+  },
+  "kyc.verify": { subAdmin: ["partners"], description: "KYC queue; approve or reject" },
+  // "kyc.reveal" was removed in Module 5 T14: everyone who can see a partner sees the
+  // full numbers (DEC-083), so there is nothing to reveal.
   "partner.self": {
     subAdmin: "never",
     description: "My own profile, KYC documents, bank/UPI details, submit for verification",

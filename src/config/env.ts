@@ -24,6 +24,34 @@ const envSchema = z.object({
   // refresh tokens. Changing it logs everyone out. Never commit it.
   AUTH_SECRET: z.string().min(32, "must be at least 32 characters (use a long random string)"),
 
+  // Encrypts KYC and payout numbers (PAN, Aadhaar, GST, bank account, UPI ID) in the
+  // database (Module 5). 32 random bytes, base64. NEVER lose or change it: the stored
+  // numbers can't be read without it. Use a different key per environment.
+  KYC_ENCRYPTION_KEY: z
+    .string()
+    .trim()
+    .refine(
+      (value) => Buffer.from(value, "base64").length === 32,
+      "must be 32 random bytes in base64 (see .env.example for the command)"
+    ),
+
+  // Cloudflare R2 file storage (DEC-084 – DEC-086). Apps upload straight to R2 with
+  // short-lived signed links; the bucket is public and we store each file's full URL.
+  R2_ACCOUNT_ID: z.string().trim().min(1, "R2_ACCOUNT_ID is required"),
+  R2_ACCESS_KEY_ID: z.string().trim().min(1, "R2_ACCESS_KEY_ID is required"),
+  R2_SECRET_ACCESS_KEY: z.string().trim().min(1, "R2_SECRET_ACCESS_KEY is required"),
+  R2_BUCKET: z.string().trim().min(1, "R2_BUCKET is required"),
+  /** The bucket's public link, e.g. https://pub-xxxx.r2.dev (no slash at the end). */
+  R2_PUBLIC_BASE_URL: z
+    .url("must be a full https:// link")
+    .trim()
+    .transform((value) => value.replace(/\/+$/, "")),
+  /** Folder in front of every file name: "dev" on development machines, "prod" on the server. */
+  STORAGE_PREFIX: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9-]+$/, "use lowercase letters, numbers or dashes, e.g. dev or prod"),
+
   // How login OTPs are delivered: "dummy" prints them in the terminal (development only),
   // "msg91" sends a real SMS.
   SMS_PROVIDER: z.enum(["dummy", "msg91"]).default("dummy"),

@@ -113,7 +113,13 @@ async function main(): Promise<void> {
           throw new Error(`Phone ${admin.SEED_ADMIN_PHONE} already belongs to another user`);
         }
         if (admin.SEED_ADMIN_EMAIL) {
-          const emailOwner = await tx.user.findUnique({ where: { email: admin.SEED_ADMIN_EMAIL } });
+          // Emails are unique among staff only; partners may share one (DEC-088).
+          const emailOwner = await tx.user.findFirst({
+            where: {
+              email: { equals: admin.SEED_ADMIN_EMAIL, mode: "insensitive" },
+              roleId: { not: ROLE.PARTNER },
+            },
+          });
           if (emailOwner) {
             throw new Error(`Email ${admin.SEED_ADMIN_EMAIL} already belongs to another user`);
           }

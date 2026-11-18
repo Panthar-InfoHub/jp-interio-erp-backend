@@ -97,10 +97,21 @@ export async function requestOtp(input: {
   app: AppType;
   ip: string | undefined;
 }): Promise<{ expiresInSeconds: number; resendAfterSeconds: number }> {
-  const { phone, app, ip } = input;
+  await assertPhoneMayLogIn(input.phone, input.app);
+  return issueOtp(input.phone, input.app, input.ip);
+}
 
-  await assertPhoneMayLogIn(phone, app);
-
+/**
+ * Sends an OTP to a phone: resend wait, saves only its hash, sends the SMS
+ * (test phones get the fixed OTP and no SMS). Used by login and by field
+ * onboarding (Module 5 T5, which sends the OTP to the new partner's phone).
+ * Callers check first that the phone may get one.
+ */
+export async function issueOtp(
+  phone: string,
+  app: AppType,
+  ip: string | undefined
+): Promise<{ expiresInSeconds: number; resendAfterSeconds: number }> {
   const [otpLength, expiryMinutes, resendWaitSeconds] = await Promise.all([
     getSetting("otp.length"),
     getSetting("otp.expiry_minutes"),
@@ -195,44 +206,7 @@ export async function verifyOtp(input: {
 }): Promise<LoginResult> {
   const { phone, app } = input;
 
-  const maxAttempts = await getSetting("otp.max_attempts");
-
-  const latest = await prisma.otpCode.findFirst({
-    where: { phone, app },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, codeHash: true, attempts: true, expiresAt: true, usedAt: true },
-  });
-
-  if (!latest || latest.usedAt) {
-    throw new AppError(NO_OTP_MESSAGE, 400, "OTP_NOT_FOUND");
-  }
-  if (latest.expiresAt.getTime() <= Date.now()) {
-    throw new AppError("This OTP has expired. Please ask for a new one.", 400, "OTP_EXPIRED");
-  }
-  if (latest.attempts >= maxAttempts) {
-    throw new AppError(
-      "Too many wrong tries. Please ask for a new OTP.",
-      400,
-      "OTP_TOO_MANY_ATTEMPTS"
-    );
-  }
-
-  if (!hashesMatch(hashOtp(phone, app, input.otp), latest.codeHash)) {
-    // Count the wrong try in the database itself, so two requests at once can't both slip by.
-    const counted = await prisma.otpCode.updateMany({
-      where: { id: latest.id, usedAt: null, attempts: { lt: maxAttempts } },
-      data: { attempts: { increment: 1 } },
-    });
-    const attemptsLeft = counted.count === 0 ? 0 : Math.max(0, maxAttempts - latest.attempts - 1);
-    throw new AppError(
-      attemptsLeft > 0
-        ? `Wrong OTP. ${attemptsLeft} ${attemptsLeft === 1 ? "try" : "tries"} left.`
-        : "Wrong OTP. No tries left; please ask for a new OTP.",
-      401,
-      "OTP_WRONG",
-      { attemptsLeft }
-    );
-  }
+  const otp = await checkOtp(phone, app, input.otp);
 
   // Settings are read before the transaction, so it stays short.
   const expiresAt = await sessionExpiresAt(app);
@@ -240,16 +214,7 @@ export async function verifyOtp(input: {
 
   const { user, sessionId, isNewPartner } = await prisma.$transaction(async (tx) => {
     // Use the OTP once. If another request used it a moment ago, stop here.
-    const used = await tx.otpCode.updateMany({
-      where: {
-        id: latest.id,
-        usedAt: null,
-        attempts: { lt: maxAttempts },
-        expiresAt: { gt: new Date() },
-      },
-      data: { usedAt: new Date() },
-    });
-    if (used.count === 0) throw new AppError(NO_OTP_MESSAGE, 400, "OTP_NOT_FOUND");
+    await useOtp(tx, otp);
 
     // Checked again: the account may have changed since the OTP was sent.
     let user = await assertPhoneMayLogIn(phone, app, tx);
@@ -311,6 +276,78 @@ export async function verifyOtp(input: {
   });
 
   return buildLoginResult(user, sessionId, app, refresh.token, expiresAt, isNewPartner);
+}
+
+/** A correct, unused OTP, ready to be used once with `useOtp` inside a transaction. */
+export interface CheckedOtp {
+  id: string;
+  maxAttempts: number;
+}
+
+/**
+ * Checks an OTP without using it up:
+ * - only the newest OTP for the phone + app counts (DEC-037);
+ * - a wrong OTP adds one try and says how many are left; at `otp.max_attempts` it dies.
+ * Shared by login and field onboarding (Module 5 T5).
+ */
+export async function checkOtp(phone: string, app: AppType, code: string): Promise<CheckedOtp> {
+  const maxAttempts = await getSetting("otp.max_attempts");
+
+  const latest = await prisma.otpCode.findFirst({
+    where: { phone, app },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, codeHash: true, attempts: true, expiresAt: true, usedAt: true },
+  });
+
+  if (!latest || latest.usedAt) {
+    throw new AppError(NO_OTP_MESSAGE, 400, "OTP_NOT_FOUND");
+  }
+  if (latest.expiresAt.getTime() <= Date.now()) {
+    throw new AppError("This OTP has expired. Please ask for a new one.", 400, "OTP_EXPIRED");
+  }
+  if (latest.attempts >= maxAttempts) {
+    throw new AppError(
+      "Too many wrong tries. Please ask for a new OTP.",
+      400,
+      "OTP_TOO_MANY_ATTEMPTS"
+    );
+  }
+
+  if (!hashesMatch(hashOtp(phone, app, code), latest.codeHash)) {
+    // Count the wrong try in the database itself, so two requests at once can't both slip by.
+    const counted = await prisma.otpCode.updateMany({
+      where: { id: latest.id, usedAt: null, attempts: { lt: maxAttempts } },
+      data: { attempts: { increment: 1 } },
+    });
+    const attemptsLeft = counted.count === 0 ? 0 : Math.max(0, maxAttempts - latest.attempts - 1);
+    throw new AppError(
+      attemptsLeft > 0
+        ? `Wrong OTP. ${attemptsLeft} ${attemptsLeft === 1 ? "try" : "tries"} left.`
+        : "Wrong OTP. No tries left; please ask for a new OTP.",
+      401,
+      "OTP_WRONG",
+      { attemptsLeft }
+    );
+  }
+
+  return { id: latest.id, maxAttempts };
+}
+
+/**
+ * Uses a checked OTP up, inside the caller's transaction, so it works only once.
+ * If another request used it a moment ago (or it just expired), stops with OTP_NOT_FOUND.
+ */
+export async function useOtp(tx: Prisma.TransactionClient, otp: CheckedOtp): Promise<void> {
+  const used = await tx.otpCode.updateMany({
+    where: {
+      id: otp.id,
+      usedAt: null,
+      attempts: { lt: otp.maxAttempts },
+      expiresAt: { gt: new Date() },
+    },
+    data: { usedAt: new Date() },
+  });
+  if (used.count === 0) throw new AppError(NO_OTP_MESSAGE, 400, "OTP_NOT_FOUND");
 }
 
 /** The reply shared by login and refresh. */

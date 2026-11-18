@@ -122,7 +122,9 @@ function findZonalHead(tx: Prisma.TransactionClient, zoneId: string) {
 }
 
 /**
- * Phone and email must not belong to anyone else (staff or partner).
+ * For staff: the phone must not belong to anyone else (staff or partner), and the email
+ * must not belong to another staff user. Partners may share emails (DEC-088), so
+ * partner emails are ignored here.
  * `exceptUserId`: the person being edited, who may keep their own.
  */
 async function assertContactFree(
@@ -138,11 +140,15 @@ async function assertContactFree(
   if (
     email &&
     (await tx.user.findFirst({
-      where: { email: { equals: email, mode: "insensitive" }, ...notMe },
+      where: {
+        email: { equals: email, mode: "insensitive" },
+        roleId: { not: ROLE.PARTNER },
+        ...notMe,
+      },
       select: { id: true },
     }))
   ) {
-    throw new ConflictError("This email already belongs to another account");
+    throw new ConflictError("This email already belongs to another staff account");
   }
 }
 

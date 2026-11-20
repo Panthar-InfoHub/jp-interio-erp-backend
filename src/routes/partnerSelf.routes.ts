@@ -2,9 +2,12 @@ import { Router } from "express";
 import { ROLE } from "../config/roles.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
+import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth, requireRole } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
+import { requireVerifiedPartner } from "../middlewares/verifiedPartner.js";
+import { myStatementSchemas } from "../validators/wallet.schema.js";
 import {
   addMyAccountSchemas,
   editMyAccountSchemas,
@@ -56,6 +59,21 @@ router.post(
   ...partnerOnly,
   validate(myAccountSchemas),
   payoutAccountController.removeMine
+);
+
+// My points wallet and statement, once verified (Module 8 T4, DEC-133).
+const walletGuards = [
+  requireAuth,
+  requireRole(ROLE.PARTNER),
+  requireVerifiedPartner,
+  requirePermission("wallet.self"),
+];
+router.get("/wallet", ...walletGuards, walletController.myWallet);
+router.get(
+  "/wallet/statement",
+  ...walletGuards,
+  validate(myStatementSchemas),
+  walletController.myStatement
 );
 
 export default router;

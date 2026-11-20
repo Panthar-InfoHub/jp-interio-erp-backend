@@ -369,6 +369,7 @@ They are always stored as **`91` + 10 digits**, with no `+` (for example `919876
   - It never creates a second Admin.
   - It **never overwrites** a setting the Admin has changed.
   - **Permissions are the exception:** the table is made to match `src/config/permissionMatrix.ts` exactly (section 9.1).
+- **Wallets (Module 8):** opens an empty points wallet for any verified partner who has none (section 14.1).
 - Each change writes an audit row with actor = system.
 
 ### Dev test data (`npm run db:dev-data`)
@@ -377,10 +378,10 @@ They are always stored as **`91` + 10 digits**, with no `+` (for example `919876
 
 - **Who it adds:**
   - 2 zones: `TPUNE` and `TMUM`;
-  - 3 Sub-Admins: one with Partners & KYC, one with Rewards & Payouts, one with no areas;
+  - 5 Sub-Admins: one with Partners & KYC, one with Rewards & Payouts, one with no areas, one with Products & Catalog (`9000000105`, DEC-116), one with QR Batches (`9000000106`, DEC-126);
   - a Zonal Head per zone;
   - 3 ASMs (Pune ASM 1 has 2 Sales Executives, Pune ASM 2 has none);
-  - 6 partners with mixed KYC states, one of them suspended.
+  - 6 partners with mixed KYC states, one of them suspended; the verified ones (A, C, E, F) get an empty points wallet.
 - **Phones `9000000101`–`9000000146`.** The script prints the full table. To log in as them, add the numbers to `TEST_PHONES` in `.env`; they use `TEST_OTP`.
 - **Safe:**
   - it refuses to run with `NODE_ENV=production`;
@@ -623,13 +624,170 @@ Dealer / OEM:  basic info → firm details → payout account → KYC → submit
 
 ---
 
-## 12. Rules every feature must follow
+## 12. Product catalog (Module 6)
+
+### 12.1 How the catalog works
+
+```
+Brand (on/off)            Category tree (each on/off, any depth)
+   │                       Plywood ─┬─ Marine ─┬─ BWR
+   │                                │          └─ BWP
+   │                                └─ Commercial
+   └──────────┬─────────────────────────┘
+           Product: SKU, name, brand, ONE category (any level), MRP, one image, on/off
+```
+
+- **Managed by** the Admin and the Products & Catalog Sub-Admin (`products.manage`, DEC-108). Nothing is ever deleted, only switched off.
+- **A product counts under its own category and every category above it**, not under its siblings or the ones below (DEC-109). A category filter always includes everything below it.
+- **"Effectively on":** a category is really on only when its own switch and every switch above it are on. Switching a parent off hides everything below; switching it back on brings back what was not switched off by itself (DEC-110, DEC-111).
+- **Who sees a product in the apps:** only when the product, its brand and its whole category chain are on.
+- **What "off" blocks:**
+
+| Switched off | Hidden in app catalog | New requests (Module 11) | New QR batches (Module 7) |
+|---|---|---|---|
+| Product | yes | blocked | blocked |
+| Brand or category | yes | blocked | **still allowed** (DEC-110) |
+
+  Use `assertProductUsable(productId, "request" | "qr_batch", tx?)` in `src/services/product.service.ts` for these checks; don't re-write them.
+- **Unique rules** (DEC-111): brand names (any case, extra spaces ignored); brand code (optional, capitals); category names among siblings; **SKU ignoring case and spaces** (`bwp 18mm` = `BWP18MM`). The cleaned copies live in `name_key` / `sku_key` (`src/utils/catalogKeys.ts`).
+- **Categories:** can be moved; never under itself or its own sub-categories, and never added / moved under a switched-off parent (DEC-112). All category changes take one lock for the whole tree. The tree is read whole and walked in memory (`src/services/categoryTree.ts`).
+- **Products:** added to / moved to only an "on" brand and an effectively-on category (DEC-114). SKU can be changed until the product has its first QR batch; after that it is locked for good, even if every batch is voided (409, `skuLocked: true`, DEC-122). MRP is `Decimal(12,2)`, more than 0, returned as text (`"1250.00"`).
+- **Images** (DEC-113): one per product, required. Upload with purpose `product_image` (JPG / PNG / WebP, 5 MB, needs `products.manage`), then send the `fileUrl` as `imageUrl`. Replacing the image deletes the old file from R2 after the save.
+
+### 12.2 Endpoints
+
+| Method & path | Who | What it does |
+|---|---|---|
+| `GET /api/brands`, `GET /:id`; `POST /`, `PATCH /:id`, `POST /:id/deactivate`, `/:id/reactivate` | Admin, Products Sub-Admin | Brands, with product counts |
+| `GET /api/categories/tree`, `GET /:id`; `POST /`, `PATCH /:id` (rename / move), `POST /:id/deactivate`, `/:id/reactivate` | Admin, Products Sub-Admin | Category tree with own / effective switch and counts (direct + including below) |
+| `GET /api/products`, `GET /:id`; `POST /`, `PATCH /:id`, `POST /:id/deactivate`, `/:id/reactivate` | Admin, Products Sub-Admin | Products; each shows `visibleInApp` and `hiddenBecause` |
+| `POST /api/uploads/upload-link` (`purpose: product_image`) | Admin, Products Sub-Admin | Signed link for a product image |
+| `GET /api/catalog/products`, `/products/:id`, `/categories`, `/brands` | Every role; partners must be verified | The read-only app catalog (Partner App, Field App, other staff) |
+
+- The app catalog shows **light fields only** and filters by brand, category and text search (DEC-115). Its brand list and category tree are short reference lists and are **not paged**; the product list is.
+- Partners on the catalog use `requireVerifiedIfPartner` (`src/middlewares/verifiedPartner.ts`): staff pass, a partner who is not verified gets 403 `PARTNER_NOT_VERIFIED`.
+- API docs: `docs/api/catalog.openapi.yaml` (and `uploads.openapi.yaml` 0.2.0). Manual test plan: `docs/testing/Module 6 complete testing.md`.
+
+### 12.3 One-time setup: CORS on the R2 bucket (for the web console)
+
+Apidog and the mobile apps don't need this. A **browser** (the web console uploading product images) is blocked by R2 unless the bucket allows the console's address. Do this once before the console goes live:
+
+1. Cloudflare dashboard → **R2** → open the bucket (`R2_BUCKET`) → **Settings** → **CORS Policy** → **Add CORS policy** (or **Edit**).
+2. Paste this, with your real console address(es) in `AllowedOrigins`:
+
+```json
+[
+  {
+    "AllowedOrigins": ["http://localhost:5173", "http://localhost:3000"],
+    "AllowedMethods": ["PUT", "GET"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+3. Save. It can take a minute to apply. Test: upload a product image from the console; the browser's network tab should show the `PUT` to R2 with status 200 and no CORS error.
+
+**Done on 2026-11-18** with the two local addresses above (checked: both allowed to PUT; other sites and DELETE refused). **When the console gets its real domain, add it to `AllowedOrigins`.**
+
+---
+
+## 13. QR codes (Module 7)
+
+### 13.1 How a batch works
+
+```
+make batch ──▶ generated ──download ZIP──▶ exported ──(download again, any number of times)
+     │               └──────────┬──────────────┘
+     │                        void (reason, permanent) ──▶ voided
+     └─ every code: active ──scan (Module 9)──▶ scanned        unused codes on void ──▶ void
+```
+
+- **Managed by** the Admin and the QR Batches Sub-Admin only (`qr.generate`, `qr.export`, `qr.void`, `qr.view`). The Zonal Head can't see QR batches (DEC-044 Q7).
+- **A code** is 12 characters of Base32 (`A–Z`, `2–7`), made with `crypto.randomBytes`: random, not in order, with no product data inside (DEC-118, DEC-121). The QR picture holds the link `https://www.jpinterio.in/q/<CODE>`. Helpers: `src/utils/qrCode.ts`.
+- **Making a batch** (`POST /api/qr/batches`):
+  - the product must be **switched on** (its brand / category may be off, DEC-110); checked with `assertProductUsable(id, "qr_batch", tx)`;
+  - limits are settings: `qr.max_batch_size` (default 10,000) and `qr.max_points_per_code` (default 1,000) (DEC-119);
+  - the batch number is `QRB-<year>-<4 digits>`, restarting every year (DEC-120);
+  - codes are made **straight away** in one transaction, inserted 1,000 at a time; a clash simply makes a new code. No expiry (DEC-117).
+- **SKU lock** (DEC-122): once a product has any QR batch its SKU can't change (product answers show `skuLocked`). The batch takes a share lock on the product row, so the two can't race.
+- **The ZIP download** (`GET /api/qr/batches/:id/export`, DEC-123), built while it is sent (`src/services/qrExport.service.ts`):
+  - `codes.csv`: batch_no, code, link, product_sku, product_name (no points);
+  - `images-png/<CODE>.png` (1000 × 1000) and `images-svg/<CODE>.svg`; highest damage tolerance (level H), no text under the QR;
+  - the same codes every time; every download is logged (who, when) **when it starts**; the first one sets the batch to `exported`;
+  - a voided batch can't be downloaded (409). About 11 seconds and 6 MB for 3,000 codes.
+- **Voiding** (`POST /api/qr/batches/:id/void`, DEC-124): permanent, reason 10–500 characters, whole batch only. Unused codes → `void`; scanned codes keep their points. Voiding twice changes nothing.
+- **Locks:** download, void and (in Module 9) scanning all lock the batch row first with `lockBatch(tx, id)` from `src/services/qrBatch.service.ts`, so a scan can't slip in while a batch is being voided. **Module 9 (Scan & Earn) must use it.**
+- **Reading a code** from what someone typed or scanned: `parseQrInput(input)` in `src/utils/qrCode.ts` accepts the plain code or the full link (any case, spaces and dashes ignored). It accepts any address that contains `/q/`; Module 9 decides whether scans accept only `jpinterio.in`.
+
+### 13.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `GET /api/qr/products` | `qr.generate` | Product picker: switched-on products, with brand / category and a note if hidden in the app (DEC-122) |
+| `POST /api/qr/batches` | `qr.generate` | `{ productId, quantity, pointsPerCode, notes? }` → makes the batch and its codes |
+| `GET /api/qr/batches/:id/export` | `qr.export` | The ZIP for printing (any number of times; logged) |
+| `POST /api/qr/batches/:id/void` | `qr.void` | `{ reason }` → void the batch |
+| `GET /api/qr/batches` | `qr.view` | Batch list with code counts, total points, download count; filters status, product, date range, batch-number search |
+| `GET /api/qr/batches/:id` | `qr.view` | Batch details, plus every download and the void details |
+| `GET /api/qr/batches/:id/codes` | `qr.view` | The batch's codes, paged; filter by status, search by code |
+| `GET /api/qr/codes/:code` | `qr.view` | One code's story (plain code or URL-encoded link): status, batch, product, who scanned it |
+
+- **Date filters** (`createdFrom`, `createdTo`) take a date-time with a time zone, e.g. `2026-11-19T00:00:00+05:30`, so the screen decides where the Indian day starts.
+- API docs: `docs/api/qr.openapi.yaml`. Manual test plan: `docs/testing/Module 7 complete testing.md`.
+
+---
+
+## 14. Points ledger & wallet (Module 8)
+
+### 14.1 How points are kept
+
+- **1 point = ₹1**, whole numbers, **never expire** (DEC-127). Rupees for screens come from `pointsToRupees()` in `src/utils/money.ts` (2-decimal text).
+- **`rewards_ledger`** is the passbook: **insert-only**. A database trigger refuses `UPDATE`, `DELETE` and `TRUNCATE`, and checks refuse 0 points or negative balances (hand-written SQL in migration `20261119114836_points_ledger_wallet`, DEC-130). A mistake is fixed with a new line. Test lines in the dev database can never be removed (DEC-131).
+- **`wallets`** holds each partner's totals: `available`, `held`, `lifetime_earned` (scans only), `lifetime_redeemed` (paid out; a refund lowers it), `net_adjusted` (manual ±), `scan_count`. A database check keeps **available = earned + net adjusted − redeemed − held** (DEC-129).
+- **Entry types:** `earn` (scan, Module 9) · `hold` / `release` / `redeem` (cash-out, Module 10) · `refund` (a paid cash-out whose transfer failed, Module 10, DEC-128) · `adjust` (manual credit / debit).
+- **The only code that changes points** is `postLedgerEntry(tx, input)` in `src/services/ledger.service.ts`, inside the caller's transaction:
+  1. locks the wallet row (`FOR UPDATE`): moves on one wallet wait in line;
+  2. a repeat of the same scan / cash-out step returns the saved line (`duplicate: true`): retry-safe through the unique (source type, source id, type);
+  3. refuses a **frozen** wallet (partner not `active` or not `verified`): every move, whoever asks (409 `WALLET_FROZEN`, DEC-131);
+  4. refuses a move the balance can't cover (400 `INSUFFICIENT_POINTS`); a manual debit never goes below zero and never touches held points (DEC-128);
+  5. writes the line (with the balances after it) and updates the wallet.
+  It writes **no audit entry**: each feature records its own in the same transaction (DEC-131). A missing wallet is a bug: logged and refused, never created on the fly.
+- **Wallets are opened** empty at KYC approval (same transaction; `walletOpened` in the approval audit), and by `npm run db:seed` / `npm run db:dev-data` for partners verified earlier (`openWallet`, `openMissingWallets` in `src/services/wallet.service.ts`, DEC-132).
+- **Who made a line:** partners, ASMs and SEs see "JP Interio"; Admin, Sub-Admins and Zonal Heads see the real name (DEC-133, DEC-134).
+
+### 14.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `GET /api/partner/wallet` | `wallet.self` + verified partner | My balance card (with rupees) |
+| `GET /api/partner/wallet/statement` | `wallet.self` + verified partner | My passbook; filters `type` (comma list), `direction`, `from`, `to` |
+| `GET /api/partners/:id/wallet` | `ledger.view` (scope) | A partner's balance card, or `wallet: null` + note if not verified |
+| `GET /api/partners/:id/ledger` | `ledger.view` (scope) | A partner's passbook (same filters) |
+| `POST /api/partners/:id/points-adjustment` | `ledger.adjust` | `{ direction, points, reason }` (reason 10–500); Admin + Rewards Sub-Admin; audited (DEC-135) |
+| `GET /api/ledger` | `ledger.view` (scope) | Lines across partners + `meta.totals`; extra filters zone, ASM, partner, search, made by |
+| `GET /api/reports/points-liability` | `reports.points_liability` (Admin) | Owed = available + held, as of `asOf`, by zone, with "of which frozen" (DEC-136) |
+
+- Partner 360 (`GET /api/partners/:id`) also has a `points` box, only for staff with `ledger.view` (DEC-134).
+- `ledger.view` scope: Admin and Rewards Sub-Admin all; Zonal Head their zone; ASM their partners (incl. their SEs'); SE their assigned partners (DEC-127).
+- **Not yet:** double-click protection and categories for adjustments, partner notices (DEC-135); Excel / CSV for the report (DEC-136).
+
+### 14.3 Reconciliation (`npm run job:reconcile-ledger`)
+
+Read-only check of every wallet against its ledger (`src/services/reconcile.service.ts`, DEC-137): totals = sum of lines, newest line = wallet, no broken chain between lines, no lines without a wallet. Mismatches → error log + one `ledger.reconcile_mismatch` audit entry, exit code 1. It **never fixes** anything. Run by hand for now (no schedule yet).
+
+- API docs: `docs/api/ledger.openapi.yaml` (and `partners.openapi.yaml` 0.6.0 for Partner 360). Manual test plan: `docs/testing/Module 8 complete testing.md`.
+
+---
+
+## 15. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
 1. **Permissions are checked on the server.** Never trust the client to hide things.
 2. **Scope:** every list and every get-by-ID goes through the scope filter. A record outside the user's scope returns **404**.
-3. **The rewards ledger is insert-only.** Points are computed by the server only.
+3. **The rewards ledger is insert-only.** Points are computed by the server only, and change only through `postLedgerEntry` (section 14.1).
 4. **Audit:** every change writes `audit_log` in the same transaction.
 5. **No hard deletes** of business records. Change their status instead.
 6. **Changes to several tables happen in one transaction.**
@@ -638,12 +796,12 @@ These are short versions; the full list is R1–R14 in the build plan.
 9. **Never log** OTPs, tokens, passwords, or Aadhaar/PAN/bank numbers.
    - The logger hides the field names in `src/config/sensitiveFields.ts`.
    - **A new secret field must use one of those names, or be added to that list.**
-10. **Every list is paged** (section 6.5).
+10. **Every list is paged** (section 6.5). Only short reference lists for pickers are exempt (e.g. the app catalog's brands and category tree, section 12.2).
 11. **Every protected route uses `requireAuth`** (section 8.3) **and `requirePermission`** (section 9.2).
 
 ---
 
-## 13. Adding a new feature (checklist)
+## 16. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -657,7 +815,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 14. Not in yet
+## 17. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

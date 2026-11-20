@@ -11,7 +11,7 @@ import { getAuthUser } from "./auth.js";
  *
  *   router.post("/scan", requireAuth, requireVerifiedPartner, requirePermission("scans.create"), ...)
  *
- * Used by: partner catalog (Module 6), QR scan (Module 8), cash-out (Module 10),
+ * Used by: partner catalog (Module 6), QR scan (Module 9), cash-out (Module 10),
  * shipment / sample requests (Module 11).
  *
  * - Not a partner (staff) → 403 FORBIDDEN.
@@ -43,4 +43,13 @@ export const requireVerifiedPartner: RequestHandler = async (req, _res, next) =>
     throw new AppError(MESSAGES[kycState], 403, "PARTNER_NOT_VERIFIED", { kycState });
   }
   next();
+};
+
+/**
+ * For routes shared by staff and partners (e.g. the product catalog, Module 6 T6, DEC-104):
+ * staff pass straight through; a partner must be verified, exactly as above.
+ */
+export const requireVerifiedIfPartner: RequestHandler = async (req, res, next) => {
+  if (getAuthUser(req).roleId !== ROLE.PARTNER) return next();
+  return requireVerifiedPartner(req, res, next);
 };

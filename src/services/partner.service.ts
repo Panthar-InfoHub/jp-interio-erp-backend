@@ -9,6 +9,7 @@ import type { ListPartnersQuery } from "../validators/partner.schema.js";
 import { recordAudit } from "./audit.service.js";
 import { buildPartnerDetail } from "./partnerDetail.service.js";
 import { assertInScope, scopeForPartners, scopeForStaff } from "./scope.service.js";
+import { pointsBoxFor360 } from "./wallet.service.js";
 
 /**
  * Partners: who looks after them (Module 4, Task 9; DEC-069). Module 5 adds onboarding,
@@ -107,7 +108,8 @@ export async function listPartners(me: AuthUser, scope: PermissionScope, query: 
 /**
  * GET /partners/:id — Partner 360: ANY state (unfinished, pending, verified, rejected),
  * within `partners.view` scope (DEC-105). Retired drafts → 404 (DEC-093).
- * Later modules add wallet, scans, payouts and requests to this reply.
+ * Module 8 adds `points` (the wallet box), only for staff with `ledger.view` (DEC-134).
+ * Later modules add scans, payouts and requests to this reply.
  */
 export async function getPartner360(me: AuthUser, scope: PermissionScope, id: string) {
   assertInScope(
@@ -123,7 +125,8 @@ export async function getPartner360(me: AuthUser, scope: PermissionScope, id: st
     }),
     { user: me, entity: "partner", id }
   );
-  return buildPartnerDetail(id);
+  const [detail, points] = await Promise.all([buildPartnerDetail(id), pointsBoxFor360(me, id)]);
+  return { ...detail, ...(points && { points }) };
 }
 
 /** What a partner looks like in these replies. */

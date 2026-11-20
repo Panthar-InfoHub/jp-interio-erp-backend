@@ -49,13 +49,8 @@ export const SETTINGS = {
     min: 15,
     max: 300,
   },
-  "scan.max_per_minute": {
-    type: "int",
-    default: 10,
-    description: "Most QR scans one partner can make in a minute.",
-    min: 1,
-    max: 60,
-  },
+  // `scan.max_per_minute` was removed (DEC-139, DEC-140): scans are never limited or tracked.
+  // Its old row may still be in the database; it is hidden and never read.
   "payout.min_points": {
     type: "int",
     default: 100,
@@ -85,6 +80,21 @@ export const SETTINGS = {
     description: "Days an unfinished partner onboarding is kept before it is removed.",
     min: 1,
     max: 365,
+  },
+  // Safety caps against typing mistakes when making a QR batch (DEC-119).
+  "qr.max_batch_size": {
+    type: "int",
+    default: 10_000,
+    description: "Most QR codes allowed in one batch.",
+    min: 1,
+    max: 100_000,
+  },
+  "qr.max_points_per_code": {
+    type: "int",
+    default: 1_000,
+    description: "Most points one QR code can carry.",
+    min: 1,
+    max: 100_000,
   },
 } as const satisfies Record<string, SettingDefinition>;
 

@@ -1,13 +1,20 @@
 import { Router } from "express";
 import { isProd } from "../config/env.js";
 import authRoutes from "./auth.routes.js";
+import brandRoutes from "./brand.routes.js";
+import catalogRoutes from "./catalog.routes.js";
+import categoryRoutes from "./category.routes.js";
 import devRoutes from "./dev.routes.js";
 import fieldOnboardingRoutes from "./fieldOnboarding.routes.js";
 import kycRoutes from "./kyc.routes.js";
+import ledgerRoutes from "./ledger.routes.js";
 import onboardingRoutes from "./onboarding.routes.js";
 import orgRoutes from "./org.routes.js";
 import partnerRoutes from "./partner.routes.js";
 import partnerSelfRoutes from "./partnerSelf.routes.js";
+import productRoutes from "./product.routes.js";
+import qrRoutes from "./qr.routes.js";
+import reportRoutes from "./report.routes.js";
 import settingsRoutes from "./settings.routes.js";
 import subAdminRoutes from "./subAdmin.routes.js";
 import teamRoutes from "./team.routes.js";
@@ -31,6 +38,13 @@ router.use("/partner/onboarding", onboardingRoutes);
 router.use("/partner", partnerSelfRoutes);
 router.use("/field/onboarding", fieldOnboardingRoutes);
 router.use("/kyc", kycRoutes);
+router.use("/brands", brandRoutes);
+router.use("/categories", categoryRoutes);
+router.use("/products", productRoutes);
+router.use("/catalog", catalogRoutes);
+router.use("/qr", qrRoutes);
+router.use("/ledger", ledgerRoutes);
+router.use("/reports", reportRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

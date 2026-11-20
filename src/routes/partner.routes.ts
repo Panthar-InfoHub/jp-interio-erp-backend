@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as partnerController from "../controllers/partner.controller.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
+import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
@@ -24,6 +25,8 @@ import {
   changePhoneSchemas,
   editPartnerProfileSchemas,
 } from "../validators/partnerProfile.schema.js";
+import { pointsAdjustmentSchemas } from "../validators/pointsAdjustment.schema.js";
+import { partnerLedgerSchemas, partnerWalletSchemas } from "../validators/wallet.schema.js";
 
 /**
  * Partners. Module 4 Task 9 (DEC-069):
@@ -112,6 +115,27 @@ router.post(
   requirePermission("partners.payout_accounts"),
   validate(partnerAccountSchemas),
   payoutAccountController.removeForPartner
+);
+
+// A partner's points (Module 8 T5, DEC-134): `ledger.view` within scope.
+router.get(
+  "/:id/wallet",
+  requirePermission("ledger.view"),
+  validate(partnerWalletSchemas),
+  walletController.partnerWallet
+);
+router.get(
+  "/:id/ledger",
+  requirePermission("ledger.view"),
+  validate(partnerLedgerSchemas),
+  walletController.partnerLedger
+);
+// Manual credit / debit with a reason (Module 8 T6): Admin and Rewards Sub-Admin.
+router.post(
+  "/:id/points-adjustment",
+  requirePermission("ledger.adjust"),
+  validate(pointsAdjustmentSchemas),
+  walletController.adjustPoints
 );
 
 // Admin only (Module 5 T7, DEC-096, DEC-097).

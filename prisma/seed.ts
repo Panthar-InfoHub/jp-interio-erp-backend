@@ -1,6 +1,7 @@
 /**
  * Fills a fresh database with the starting data: the 6 roles, the first Admin
- * (from .env), the default settings and the permission matrix. Run with `npm run db:seed`.
+ * (from .env), the default settings and the permission matrix, and opens an empty points
+ * wallet for any verified partner who has none (Module 8, DEC-132). Run with `npm run db:seed`.
  *
  * Safe to run again: it only adds what is missing. Existing settings are never
  * overwritten (the Admin may have changed them), and no second Admin is created.
@@ -16,6 +17,7 @@ import { ROLE, ROLES } from "../src/config/roles.js";
 import { SETTINGS, type SettingKey } from "../src/config/settings.js";
 import { getPermissionRows } from "../src/config/permissionMatrix.js";
 import { recordAudit } from "../src/services/audit.service.js";
+import { openMissingWallets } from "../src/services/wallet.service.js";
 import { normalizePhone } from "../src/utils/phone.js";
 
 const seedEnvSchema = z.object({
@@ -240,7 +242,11 @@ async function main(): Promise<void> {
         permissionsDeleted++;
       }
 
+      // ---- 5. Wallets: open an empty one for any verified partner without one (DEC-129, DEC-132) ----
+      const wallets = await openMissingWallets(tx, "seed");
+
       return {
+        wallets,
         rolesAdded,
         rolesUpdated,
         rolesTotal: ROLES.length,
@@ -270,6 +276,10 @@ async function main(): Promise<void> {
   console.log(
     `   Permissions: ${summary.permissionsAdded} added, ${summary.permissionsUpdated} updated, ` +
       `${summary.permissionsDeleted} deleted (${summary.permissionsTotal} rows in the matrix)`
+  );
+  console.log(
+    `   Wallets:  ${summary.wallets.opened} opened, ${summary.wallets.existing} already there ` +
+      "(verified partners)"
   );
   for (const warning of summary.warnings) console.warn(`⚠️  ${warning}`);
 }

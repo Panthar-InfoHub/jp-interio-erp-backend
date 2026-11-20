@@ -9,6 +9,7 @@ import type { KycQueueQuery } from "../validators/kyc.schema.js";
 import { recordAudit } from "./audit.service.js";
 import { buildPartnerDetail, roleName } from "./partnerDetail.service.js";
 import { assertInScope, scopeForPartners } from "./scope.service.js";
+import { openWallet } from "./wallet.service.js";
 
 /**
  * KYC queue (Module 5 T8; DEC-073, DEC-074, DEC-083, DEC-098).
@@ -21,6 +22,7 @@ import { assertInScope, scopeForPartners } from "./scope.service.js";
  *      └──reject (reason)──▶ rejected ──undo (Admin, reason)──▶ pending (back in the queue)
  *
  * Reject is final for the partner: no re-submission (DEC-073). Only the Admin can undo it.
+ * Approve also opens the partner's empty points wallet, in the same transaction (DEC-132).
  * Every step writes a `kyc_reviews` row (insert-only history) and an audit row, in one
  * transaction. Each step is guarded on the current state, so two checkers acting at the
  * same moment cannot both succeed.
@@ -190,17 +192,6 @@ async function moveState(
   if (count === 0) throw wrongState(message);
 }
 
-/**
- * Module 8 hook: open the partner's points wallet when they are verified.
- * The wallet table does not exist yet; Module 8 fills this in (inside the same transaction).
- */
-async function openWalletOnVerify(
-  _tx: Prisma.TransactionClient,
-  _partnerId: string
-): Promise<void> {
-  // Connected in Module 8 (wallets).
-}
-
 const NOT_PENDING = "This onboarding is not waiting for approval any more. Please refresh.";
 
 export async function approve(
@@ -263,13 +254,19 @@ export async function approve(
     await tx.kycReview.create({
       data: { partnerId, action: "approved", actorId: actor.id, assignedAsmId: pickedAsmId },
     });
-    await openWalletOnVerify(tx, partnerId);
+    // Module 8: open the points wallet in the same transaction (DEC-132). No separate audit.
+    const walletOpened = await openWallet(tx, partnerId);
     await recordAudit(tx, {
       actorId: actor.id,
       action: "partner.kyc_approve",
       entity: { type: "partner", id: partnerId },
       before: { kycState: "pending", asmId: base.user.parentId },
-      after: { kycState: "verified", asmId: pickedAsmId ?? base.user.parentId, reviewedAt: now },
+      after: {
+        kycState: "verified",
+        asmId: pickedAsmId ?? base.user.parentId,
+        reviewedAt: now,
+        walletOpened,
+      },
     });
   });
 

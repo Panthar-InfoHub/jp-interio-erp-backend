@@ -10,15 +10,17 @@ import { env } from "../config/env.js";
 import {
   ALLOWED_CONTENT_TYPES,
   type AllowedContentType,
-  MAX_UPLOAD_BYTES,
   UPLOAD_LINK_SECONDS,
   UPLOAD_PURPOSES,
   type UploadPurpose,
+  sizeLabel,
+  uploadRule,
 } from "../config/uploads.js";
 import { R2_BUCKET, r2 } from "../lib/storage/r2Client.js";
 import { logger } from "../lib/logger.js";
 import type { AuthUser } from "../middlewares/auth.js";
 import { ForbiddenError, ValidationError } from "../utils/errors.js";
+import { getPermissionScope } from "./permission.service.js";
 
 /**
  * File storage on Cloudflare R2 (Module 5 T3, DEC-084 – DEC-086).
@@ -69,9 +71,17 @@ export async function createUploadLink(
   actor: AuthUser,
   input: { purpose: UploadPurpose; contentType: AllowedContentType; sizeBytes: number }
 ): Promise<UploadLink> {
-  const rule = UPLOAD_PURPOSES[input.purpose];
-  if (!(rule.roles as readonly number[]).includes(actor.roleId)) {
-    throw new ForbiddenError("You cannot upload files for this.");
+  const rule = uploadRule(input.purpose);
+  const allowed =
+    (rule.roles as readonly number[]).includes(actor.roleId) &&
+    (!rule.capability || (await getPermissionScope(actor, rule.capability)) !== null);
+  if (!allowed) throw new ForbiddenError("You cannot upload files for this.");
+  // The validator already checks these; repeated here so the service is safe on its own.
+  if (!rule.contentTypes.includes(input.contentType)) {
+    throw new ValidationError(`The file must be ${rule.typesLabel}.`);
+  }
+  if (input.sizeBytes > rule.maxBytes) {
+    throw new ValidationError(`The file must be ${sizeLabel(rule.maxBytes)} or smaller.`);
   }
 
   const extension = ALLOWED_CONTENT_TYPES[input.contentType];
@@ -147,7 +157,8 @@ export async function deleteFile(fileUrl: string): Promise<void> {
  * Step 3: checks an uploaded file before a record points to it.
  * - The URL must be one of ours, in this purpose's folder, uploaded by this user
  *   (so nobody can attach someone else's file or a random link).
- * - The file must exist, be 10 MB or less, and be an allowed type.
+ * - The file must exist, and fit this purpose's types and size limit (KYC: PDF or image,
+ *   10 MB; product image: JPG / PNG / WebP, 5 MB — config/uploads.ts).
  * - Its first bytes must match its type (a renamed .exe is refused and deleted).
  */
 export async function verifyUploadedFile(
@@ -171,17 +182,21 @@ export async function verifyUploadedFile(
     throw error;
   }
 
+  const rule = uploadRule(purpose);
   const contentType = head.ContentType as AllowedContentType | undefined;
   const sizeBytes = head.ContentLength ?? 0;
-  const expectedExtension = contentType ? ALLOWED_CONTENT_TYPES[contentType] : undefined;
+  const expectedExtension =
+    contentType && rule.contentTypes.includes(contentType)
+      ? ALLOWED_CONTENT_TYPES[contentType]
+      : undefined;
 
   if (!expectedExtension || !key.endsWith(`.${expectedExtension}`)) {
     await deleteFile(fileUrl);
-    throw new ValidationError(`The ${label} must be a PDF or an image (JPG, PNG, WebP, HEIC).`);
+    throw new ValidationError(`The ${label} must be ${rule.typesLabel}.`);
   }
-  if (sizeBytes <= 0 || sizeBytes > MAX_UPLOAD_BYTES) {
+  if (sizeBytes <= 0 || sizeBytes > rule.maxBytes) {
     await deleteFile(fileUrl);
-    throw new ValidationError(`The ${label} must be 10 MB or smaller.`);
+    throw new ValidationError(`The ${label} must be ${sizeLabel(rule.maxBytes)} or smaller.`);
   }
 
   const start = await r2.send(
@@ -191,7 +206,7 @@ export async function verifyUploadedFile(
   if (!contentMatches(contentType!, bytes)) {
     await deleteFile(fileUrl);
     throw new ValidationError(
-      `The ${label} is not a real PDF or image. Please upload the correct file.`
+      `The ${label} is not really ${rule.typesLabel}. Please upload the correct file.`
     );
   }
 

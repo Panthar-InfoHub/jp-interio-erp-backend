@@ -22,6 +22,7 @@ import type {
   UserStatus,
 } from "../src/generated/prisma/enums.js";
 import { recordAudit } from "../src/services/audit.service.js";
+import { openWallet } from "../src/services/wallet.service.js";
 import { normalizePhone } from "../src/utils/phone.js";
 
 const SOURCE = "dev-data";
@@ -92,6 +93,22 @@ const PEOPLE: PersonSpec[] = [
     phone: "9000000103",
     areas: [],
     note: "no areas (should be refused everywhere)",
+  },
+  {
+    key: "sa_products",
+    name: "TEST Sub-Admin Products",
+    roleId: ROLE.SUB_ADMIN,
+    phone: "9000000105",
+    areas: ["products"],
+    note: "area: Products & Catalog (Module 6 testing, DEC-116)",
+  },
+  {
+    key: "sa_qr",
+    name: "TEST Sub-Admin QR",
+    roleId: ROLE.SUB_ADMIN,
+    phone: "9000000106",
+    areas: ["qr"],
+    note: "area: QR Batches (Module 7 testing, DEC-126)",
   },
   {
     key: "zh_pune",
@@ -415,7 +432,29 @@ async function main(): Promise<void> {
         }
       }
 
-      return { zonesAdded, peopleAdded, areasAdded };
+      // ---- 3. Wallets for the verified test partners (Module 8, DEC-132) ----
+      let walletsOpened = 0;
+      for (const spec of PEOPLE) {
+        if (spec.partner?.kycState !== "verified") continue;
+        const userId = userIds.get(spec.key);
+        if (!userId) continue;
+        // Only if this test partner really is verified in the database (data is never changed).
+        const profile = await tx.partnerProfile.findUnique({
+          where: { userId },
+          select: { kycState: true },
+        });
+        if (profile?.kycState !== "verified") continue;
+        if (!(await openWallet(tx, userId))) continue;
+        await recordAudit(tx, {
+          actorId: null,
+          action: "wallet.open",
+          entity: { type: "partner", id: userId },
+          after: { available: 0, held: 0, source: SOURCE },
+        });
+        walletsOpened++;
+      }
+
+      return { zonesAdded, peopleAdded, areasAdded, walletsOpened };
     },
     // Neon can be slow while it wakes up; this transaction makes many small queries.
     { maxWait: 15_000, timeout: 90_000 }
@@ -425,7 +464,8 @@ async function main(): Promise<void> {
   console.log("✅ Dev test data ready");
   console.log(
     `   Zones: ${summary.zonesAdded} added · People: ${summary.peopleAdded} added · ` +
-      `Sub-Admin areas: ${summary.areasAdded} added (the rest already existed)\n`
+      `Sub-Admin areas: ${summary.areasAdded} added · Wallets: ${summary.walletsOpened} opened ` +
+      `(the rest already existed)\n`
   );
   console.table(
     PEOPLE.map((person) => ({

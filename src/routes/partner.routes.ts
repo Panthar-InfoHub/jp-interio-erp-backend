@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as partnerController from "../controllers/partner.controller.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
+import * as scanController from "../controllers/scan.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
@@ -26,6 +27,7 @@ import {
   editPartnerProfileSchemas,
 } from "../validators/partnerProfile.schema.js";
 import { pointsAdjustmentSchemas } from "../validators/pointsAdjustment.schema.js";
+import { partnerScansSchemas } from "../validators/scan.schema.js";
 import { partnerLedgerSchemas, partnerWalletSchemas } from "../validators/wallet.schema.js";
 
 /**
@@ -129,6 +131,13 @@ router.get(
   requirePermission("ledger.view"),
   validate(partnerLedgerSchemas),
   walletController.partnerLedger
+);
+// A partner's scans (Module 9 T4, DEC-145): `scans.view` within scope.
+router.get(
+  "/:id/scans",
+  requirePermission("scans.view"),
+  validate(partnerScansSchemas),
+  scanController.partnerScans
 );
 // Manual credit / debit with a reason (Module 8 T6): Admin and Rewards Sub-Admin.
 router.post(

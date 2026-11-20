@@ -46,6 +46,43 @@ export function parseQrInput(input: string): string | null {
   return new RegExp(`^[A-Z2-7]{${QR_CODE_LENGTH}}$`).test(code) ? code : null;
 }
 
+/** Sites whose `/q/<CODE>` links a scan accepts (DEC-139, DEC-142). */
+const SCAN_HOSTS = new Set(["jpinterio.in", "www.jpinterio.in"]);
+
+/**
+ * The strict reader used by scanning (Module 9, DEC-139, DEC-142). Accepts only:
+ * - a link `http(s)://jpinterio.in/q/<CODE>` or `http(s)://www.jpinterio.in/q/<CODE>`
+ *   (any case; a trailing `/`, `?…` or `#…` is ignored), or
+ * - the plain 12-character code (spaces and dashes ignored, any case).
+ * Returns the clean code, or null for anything else (other sites, other paths, bad codes).
+ * The staff code lookup keeps the looser `parseQrInput` above.
+ */
+export function parseScanInput(input: string): string | null {
+  const text = input.trim();
+  const codePattern = new RegExp(`^[A-Z2-7]{${QR_CODE_LENGTH}}$`);
+
+  if (!/^https?:\/\//i.test(text)) {
+    // Not a link: it must be the plain code.
+    if (text.includes("/") || text.includes(".")) return null;
+    const code = text.replace(/[\s-]/g, "").toUpperCase();
+    return codePattern.test(code) ? code : null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.port) return null;
+  if (!SCAN_HOSTS.has(url.hostname.toLowerCase())) return null;
+
+  const match = /^\/q\/([^/]+)\/?$/i.exec(url.pathname);
+  if (!match?.[1]) return null;
+  const code = decodeURIComponent(match[1]).toUpperCase();
+  return codePattern.test(code) ? code : null;
+}
+
 /** Batch number shown to people: `QRB-2026-0001` (DEC-120). Grows past 9999 if needed. */
 export function formatBatchNo(year: number, seq: number): string {
   return `QRB-${year}-${String(seq).padStart(4, "0")}`;

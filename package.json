@@ -22,7 +22,8 @@
     "db:dev-data": "tsx prisma/devData.ts",
     "db:studio": "prisma studio",
     "job:clean-drafts": "tsx src/jobs/cleanDrafts.ts",
-    "job:reconcile-ledger": "tsx src/jobs/reconcileLedger.ts"
+    "job:reconcile-ledger": "tsx src/jobs/reconcileLedger.ts",
+    "check:parallel-scan": "tsx src/jobs/parallelScanCheck.ts"
   },
   "keywords": [],
   "author": "",

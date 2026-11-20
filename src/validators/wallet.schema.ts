@@ -4,8 +4,11 @@ import { idParams } from "./common.js";
 
 const ENTRY_TYPES = ["earn", "hold", "release", "redeem", "refund", "adjust"] as const;
 
-/** A moment like "2026-11-19T00:00:00+05:30"; the screen sends its own day start / end. */
-const moment = (label: string) =>
+/**
+ * A moment like "2026-11-19T00:00:00+05:30"; the screen sends its own day start / end.
+ * Also used by the scan history (Module 9 T4).
+ */
+export const moment = (label: string) =>
   z.iso
     .datetime({
       offset: true,
@@ -41,9 +44,9 @@ const statementFields = listQuery({
   to: moment("to").optional(),
 });
 
-const datesInOrder = (query: { from?: Date; to?: Date }) =>
+export const datesInOrder = (query: { from?: Date; to?: Date }) =>
   !query.from || !query.to || query.from <= query.to;
-const datesMessage = { message: "from must be before to", path: ["to"] };
+export const datesMessage = { message: "from must be before to", path: ["to"] };
 
 export const statementQuery = statementFields.refine(datesInOrder, datesMessage);
 export type StatementQuery = z.output<typeof statementQuery>;

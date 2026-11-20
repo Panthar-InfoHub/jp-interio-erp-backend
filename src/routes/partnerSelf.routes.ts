@@ -2,11 +2,13 @@ import { Router } from "express";
 import { ROLE } from "../config/roles.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
+import * as scanController from "../controllers/scan.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth, requireRole } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
 import { requireVerifiedPartner } from "../middlewares/verifiedPartner.js";
+import { myScansSchemas, scanSchemas } from "../validators/scan.schema.js";
 import { myStatementSchemas } from "../validators/wallet.schema.js";
 import {
   addMyAccountSchemas,
@@ -75,5 +77,18 @@ router.get(
   validate(myStatementSchemas),
   walletController.myStatement
 );
+
+// Scan a QR code and earn its points (Module 9 T2, DEC-138 – DEC-142).
+router.post(
+  "/scans",
+  requireAuth,
+  requireRole(ROLE.PARTNER),
+  requireVerifiedPartner,
+  requirePermission("scans.create"),
+  validate(scanSchemas),
+  scanController.scan
+);
+// My scan history (Module 9 T4, DEC-145): same guards as the wallet.
+router.get("/scans", ...walletGuards, validate(myScansSchemas), scanController.myScans);
 
 export default router;

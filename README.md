@@ -781,7 +781,38 @@ Read-only check of every wallet against its ledger (`src/services/reconcile.serv
 
 ---
 
-## 15. Rules every feature must follow
+## 15. Scan & earn (Module 9)
+
+### 15.1 How a scan works
+
+`POST /api/partner/scans` with `{ code, deviceId? }` (`src/services/scan.service.ts`, DEC-138 – DEC-143):
+
+1. **Read strictly** (`parseScanInput()` in `src/utils/qrCode.ts`): only `http(s)://jpinterio.in/q/<CODE>`, `http(s)://www.jpinterio.in/q/<CODE>` or the plain 12-character code. Anything else → `INVALID_CODE`. (The staff code lookup keeps the looser `parseQrInput()`.)
+2. **Find the code** → else `INVALID_CODE`.
+3. **One transaction, batch row locked** with `lockBatch()` (same lock as void and download; scans from one batch go one at a time, DEC-147):
+   - scanned by **this partner** → a retry: 200, the original scan, **no new points**, the balance now (DEC-142);
+   - scanned by **someone else** → 409 `ALREADY_SCANNED` "This code has already been redeemed." (no date, no name);
+   - **voided** code or batch → 409 `VOIDED`;
+   - **active** → code marked `scanned` (who / when) + a `scans` row (zone and owning ASM copied now) + `postLedgerEntry({ type: "earn" })` with the **batch's** points + audit `scan.create`. 201.
+- **Switched-off products still earn** (DEC-142). **No rate limit and no location** (DEC-138, DEC-139).
+- **Three guards against double points:** the batch lock, the unique `scans.qr_code_id`, and the ledger's unique (source, type). Proven with 20 parallel scans of one code (DEC-146).
+- **Failed scans** by verified partners are saved in `scan_attempts` (reason `invalid_code` / `already_scanned` / `voided`, input, code read loosely, QR code id, device, IP). No audit entry; nobody can view them yet (Module 17). A failed save is only logged (DEC-144).
+- `awardScan(tx, …)`, `saveAttempt(…, db)` and the history functions take a transaction / `db`, so checks can run them and roll back.
+
+### 15.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `POST /api/partner/scans` | `scans.create` + verified partner | Scan a code: 201 new (`N points added`), 200 retry (`This scan was already counted`) |
+| `GET /api/partner/scans` | `wallet.self` + verified partner | My scans: time, code, points, product; filters `from`, `to`, `productId`; `meta.totals` (scans, points) |
+| `GET /api/partners/:id/scans` | `scans.view` (scope) | A partner's scans: adds the batch; device ID and IP only for Admin and Sub-Admins (DEC-145) |
+
+- `scans.view` scope: Admin, Partners and Rewards Sub-Admins all; Zonal Head their zone; ASM their partners; SE their assigned partners. Scope follows the partner's current owner.
+- API docs: `docs/api/scans.openapi.yaml`. Manual test plan: `docs/testing/Module 9 complete testing.md`.
+
+---
+
+## 16. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -801,7 +832,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 16. Adding a new feature (checklist)
+## 17. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -815,7 +846,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 17. Not in yet
+## 18. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

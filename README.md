@@ -812,7 +812,55 @@ Read-only check of every wallet against its ledger (`src/services/reconcile.serv
 
 ---
 
-## 16. Rules every feature must follow
+## 16. Payouts (Module 10)
+
+### 16.1 How a payout works
+
+A verified partner cashes points out to one of their saved payout accounts (1 point = ₹1). Staff pay **by hand, outside the platform**, then mark it paid (`src/services/payout.service.ts`, DEC-148 – DEC-156).
+
+```
+requested ──approve──► approved ──mark-paid──► paid ──mark-failed──► failed (final)
+    │                      │
+    └──────decline─────────┘──► declined (final)
+```
+
+| Step | From | Points (`postLedgerEntry`) | Audit |
+|---|---|---|---|
+| Ask (`Idempotency-Key` header) | — | `hold` | `payout.request` |
+| Approve | requested | none (stay held) | `payout.approve` |
+| Decline (reason 10–500, partner sees it) | requested, approved | `release` | `payout.decline` |
+| Mark paid (method; transaction ID unless cash; optional proof) | approved | `redeem` | `payout.mark_paid` |
+| Correct paid details (no reason) | paid | none | `payout.paid_details_edit` |
+| Mark failed (reason 10–500) | paid | `refund` | `payout.mark_failed` |
+
+- **Asking** (`createPayout`): one transaction. Locks the **wallet first** (so a partner's requests and every points move wait in line), then checks the `Idempotency-Key` (same key + same points / account / note → the payout already made, 200; other details → 409 `IDEMPOTENCY_KEY_REUSED`), the minimum `payout.min_points` (no maximum, any whole number), and the account (own, not removed; locked with `lockPartnerAccounts`). The account's details **and the encrypted full number** are copied onto the payout; the partner's zone and owning ASM are copied for reports. Number `PAY-<year>-<6 digits>` from an advisory lock, restarting each UTC year.
+- **Staff steps** (`approveInTx`, `declineInTx`, `markPaidInTx`, `editPaidDetailsInTx`, `markFailedInTx`): scope check by the partner's **current** owner (out of scope → 404), then lock the wallet, then the payout row (same order as asking: no deadlocks). A button pressed again → 200 `alreadyDone`, nothing changes. A step the status doesn't allow → 409 `PAYOUT_WRONG_STATUS`. A **frozen wallet** (partner suspended / not verified) refuses every step except correcting paid details → 409 `WALLET_FROZEN`; the payout waits.
+- **Proof** (optional, any method): upload purpose `payout_proof` (PDF or image, 5 MB, `src/config/uploads.ts`); checked in R2 with `verifyUploadedFile` **before** the transaction. Replaced / removed proof files are kept (the audit trail still points to them). **Only staff see the proof** and staff names; the partner sees the reasons.
+- **Full account numbers** are shown to everyone who can see the payout (DEC-083), never logged or written to the audit log.
+- Not built (DEC-148, DEC-153, DEC-156): Processing step, partner cancel, TDS, fraud-flag block (Module 17), notifications, CSV download.
+
+### 16.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `POST /api/partner/payouts` | `payouts.request` + verified partner | Ask for a payout; 201 new, 200 retry. Needs `Idempotency-Key` |
+| `GET /api/partner/payouts` | `payouts.request` + verified partner | My payouts, newest first; filter `status` |
+| `GET /api/partner/payouts/:id` | `payouts.request` + verified partner | One of my payouts (someone else's → 404) |
+| `GET /api/payouts` | `payouts.view` (scope) | Staff list, newest first, full numbers; filters `status`, `zoneId`, `search`, `from`, `to`, `paidMethod`; no totals |
+| `GET /api/payouts/:id` | `payouts.view` (scope) | One payout + `partnerContext` (wallet, scans last 30 days, last 5 payouts, verified date) |
+| `POST /api/payouts/:id/approve` | `payouts.approve` (scope) | requested → approved |
+| `POST /api/payouts/:id/decline` | `payouts.approve` (scope) | requested / approved → declined; points back |
+| `POST /api/payouts/:id/mark-paid` | `payouts.mark_paid` (scope) | approved → paid; points paid out |
+| `PATCH /api/payouts/:id/paid-details` | `payouts.mark_paid` (scope) | Correct method / transaction ID / proof while paid |
+| `POST /api/payouts/:id/mark-failed` | `payouts.approve` (scope) | paid → failed (final); points back |
+
+- Scope: Admin and the Rewards & Payouts Sub-Admin all partners; Zonal Head their zone; ASM (view only) their partners incl. their SEs'; Sales Executive (view only) their assigned partners.
+- Partner 360 (`GET /api/partners/:id`) has a `payouts` box for staff with `payouts.view` (`payoutsBoxFor360`).
+- API docs: `docs/api/payouts.openapi.yaml` (also `uploads` 0.3.0, `partners` 0.7.0). Manual test plan: `docs/testing/Module 10 complete testing.md`.
+
+---
+
+## 17. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -832,7 +880,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 17. Adding a new feature (checklist)
+## 18. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -846,7 +894,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 18. Not in yet
+## 19. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

@@ -29,8 +29,14 @@ import { assertInScope, scopeForPartners } from "./scope.service.js";
  *   changes at once (e.g. two removals leaving zero accounts).
  */
 
-/** Serialises changes to one partner's accounts for the rest of the transaction. */
-async function lockPartnerAccounts(tx: Prisma.TransactionClient, partnerId: string): Promise<void> {
+/**
+ * Serialises changes to one partner's accounts for the rest of the transaction. Also
+ * taken by a payout request (Module 10), so the account it copies can't change meanwhile.
+ */
+export async function lockPartnerAccounts(
+  tx: Prisma.TransactionClient,
+  partnerId: string
+): Promise<void> {
   const key = `payout-accounts:${partnerId}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}::text, 0))`;
 }

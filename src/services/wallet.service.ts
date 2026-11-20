@@ -178,7 +178,7 @@ export async function getWallet(partnerId: string) {
 const NO_WALLET_NOTE = "No wallet yet: the partner isn't verified.";
 
 /** A staff answer about one partner's wallet: the wallet, or null with a note (DEC-134). */
-async function walletForStaff(partnerId: string) {
+export async function walletForStaff(partnerId: string) {
   const wallet = await loadWallet(partnerId);
   return { wallet, note: wallet ? null : NO_WALLET_NOTE };
 }

@@ -12,6 +12,7 @@ import onboardingRoutes from "./onboarding.routes.js";
 import orgRoutes from "./org.routes.js";
 import partnerRoutes from "./partner.routes.js";
 import partnerSelfRoutes from "./partnerSelf.routes.js";
+import payoutRoutes from "./payout.routes.js";
 import productRoutes from "./product.routes.js";
 import qrRoutes from "./qr.routes.js";
 import reportRoutes from "./report.routes.js";
@@ -45,6 +46,7 @@ router.use("/catalog", catalogRoutes);
 router.use("/qr", qrRoutes);
 router.use("/ledger", ledgerRoutes);
 router.use("/reports", reportRoutes);
+router.use("/payouts", payoutRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

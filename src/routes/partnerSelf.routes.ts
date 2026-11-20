@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ROLE } from "../config/roles.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
+import * as payoutController from "../controllers/payout.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
 import * as scanController from "../controllers/scan.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
@@ -8,6 +9,11 @@ import { requireAuth, requireRole } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
 import { requireVerifiedPartner } from "../middlewares/verifiedPartner.js";
+import {
+  myPayoutsSchemas,
+  payoutIdSchemas,
+  requestPayoutSchemas,
+} from "../validators/payout.schema.js";
 import { myScansSchemas, scanSchemas } from "../validators/scan.schema.js";
 import { myStatementSchemas } from "../validators/wallet.schema.js";
 import {
@@ -90,5 +96,25 @@ router.post(
 );
 // My scan history (Module 9 T4, DEC-145): same guards as the wallet.
 router.get("/scans", ...walletGuards, validate(myScansSchemas), scanController.myScans);
+
+// Ask for a payout (Module 10 T2, DEC-149 – DEC-153). Needs an `Idempotency-Key` header.
+router.post(
+  "/payouts",
+  requireAuth,
+  requireRole(ROLE.PARTNER),
+  requireVerifiedPartner,
+  requirePermission("payouts.request"),
+  validate(requestPayoutSchemas),
+  payoutController.request
+);
+// My payouts and one payout (Module 10 T5, DEC-156): same guards as asking for one.
+const payoutGuards = [
+  requireAuth,
+  requireRole(ROLE.PARTNER),
+  requireVerifiedPartner,
+  requirePermission("payouts.request"),
+];
+router.get("/payouts", ...payoutGuards, validate(myPayoutsSchemas), payoutController.myPayouts);
+router.get("/payouts/:id", ...payoutGuards, validate(payoutIdSchemas), payoutController.myPayout);
 
 export default router;

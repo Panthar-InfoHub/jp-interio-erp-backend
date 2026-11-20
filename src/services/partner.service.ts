@@ -9,6 +9,7 @@ import type { ListPartnersQuery } from "../validators/partner.schema.js";
 import { recordAudit } from "./audit.service.js";
 import { buildPartnerDetail } from "./partnerDetail.service.js";
 import { assertInScope, scopeForPartners, scopeForStaff } from "./scope.service.js";
+import { payoutsBoxFor360 } from "./payout.service.js";
 import { pointsBoxFor360 } from "./wallet.service.js";
 
 /**
@@ -125,8 +126,12 @@ export async function getPartner360(me: AuthUser, scope: PermissionScope, id: st
     }),
     { user: me, entity: "partner", id }
   );
-  const [detail, points] = await Promise.all([buildPartnerDetail(id), pointsBoxFor360(me, id)]);
-  return { ...detail, ...(points && { points }) };
+  const [detail, points, payouts] = await Promise.all([
+    buildPartnerDetail(id),
+    pointsBoxFor360(me, id),
+    payoutsBoxFor360(me, id),
+  ]);
+  return { ...detail, ...(points && { points }), ...(payouts && { payouts }) };
 }
 
 /** What a partner looks like in these replies. */

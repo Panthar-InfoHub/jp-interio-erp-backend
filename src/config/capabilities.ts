@@ -136,11 +136,14 @@ export const CAPABILITIES = {
   },
   "reports.points_liability": { subAdmin: "never", description: "Points liability report" },
   "payouts.request": { subAdmin: "never", description: "Cash out points" },
-  "payouts.view": { subAdmin: ["rewards"], description: "Payout list and approval queue" },
-  "payouts.approve": { subAdmin: ["rewards"], description: "Approve or decline a payout" },
+  "payouts.view": { subAdmin: ["rewards"], description: "Payout list and one payout" },
+  "payouts.approve": {
+    subAdmin: ["rewards"],
+    description: "Approve or decline a payout; mark a paid payout failed",
+  },
   "payouts.mark_paid": {
     subAdmin: ["rewards"],
-    description: "Mark a payout processing, enter the UTR, mark paid",
+    description: "Mark a payout paid (method, transaction ID, proof); correct paid details",
   },
 
   // ---- Leads and requests (Modules 11, 13) ----

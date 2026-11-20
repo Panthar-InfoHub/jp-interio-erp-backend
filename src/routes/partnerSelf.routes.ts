@@ -3,6 +3,7 @@ import { ROLE } from "../config/roles.js";
 import * as partnerSelfController from "../controllers/partnerSelf.controller.js";
 import * as payoutController from "../controllers/payout.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
+import * as requestController from "../controllers/request.controller.js";
 import * as scanController from "../controllers/scan.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth, requireRole } from "../middlewares/auth.js";
@@ -14,6 +15,12 @@ import {
   payoutIdSchemas,
   requestPayoutSchemas,
 } from "../validators/payout.schema.js";
+import {
+  cancelRequestSchemas,
+  createRequestSchemas,
+  myRequestsSchemas,
+  requestIdSchemas,
+} from "../validators/request.schema.js";
 import { myScansSchemas, scanSchemas } from "../validators/scan.schema.js";
 import { myStatementSchemas } from "../validators/wallet.schema.js";
 import {
@@ -116,5 +123,37 @@ const payoutGuards = [
 ];
 router.get("/payouts", ...payoutGuards, validate(myPayoutsSchemas), payoutController.myPayouts);
 router.get("/payouts/:id", ...payoutGuards, validate(payoutIdSchemas), payoutController.myPayout);
+
+// Shipment / sample requests (Module 11 T3, DEC-157 – DEC-169). Verified partners only.
+// Send and cancel need `requests.create`; the list and details need `requests.view` (own).
+const requestGuards = [requireAuth, requireRole(ROLE.PARTNER), requireVerifiedPartner];
+router.post(
+  "/requests",
+  ...requestGuards,
+  requirePermission("requests.create"),
+  validate(createRequestSchemas),
+  requestController.createMine
+);
+router.get(
+  "/requests",
+  ...requestGuards,
+  requirePermission("requests.view"),
+  validate(myRequestsSchemas),
+  requestController.listMine
+);
+router.get(
+  "/requests/:id",
+  ...requestGuards,
+  requirePermission("requests.view"),
+  validate(requestIdSchemas),
+  requestController.getMine
+);
+router.post(
+  "/requests/:id/cancel",
+  ...requestGuards,
+  requirePermission("requests.create"),
+  validate(cancelRequestSchemas),
+  requestController.cancelMine
+);
 
 export default router;

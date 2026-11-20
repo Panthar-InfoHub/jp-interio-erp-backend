@@ -16,6 +16,7 @@ import payoutRoutes from "./payout.routes.js";
 import productRoutes from "./product.routes.js";
 import qrRoutes from "./qr.routes.js";
 import reportRoutes from "./report.routes.js";
+import requestRoutes from "./request.routes.js";
 import settingsRoutes from "./settings.routes.js";
 import subAdminRoutes from "./subAdmin.routes.js";
 import teamRoutes from "./team.routes.js";
@@ -47,6 +48,7 @@ router.use("/qr", qrRoutes);
 router.use("/ledger", ledgerRoutes);
 router.use("/reports", reportRoutes);
 router.use("/payouts", payoutRoutes);
+router.use("/requests", requestRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

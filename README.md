@@ -3,7 +3,7 @@
 The server for the **JP Interio Channel & Rewards Platform**, built by Panthar Infohub.
 
 - Partners (carpenters, dealers, OEMs) scan QR codes on products to earn points (1 point = ₹1) and cash them out.
-- Field staff manage partners, tasks, leads and requests inside a 6-tier hierarchy.
+- Field staff manage partners, tasks and shipment / sample requests ("leads") inside a 6-tier hierarchy.
 - The web console, the field app and the partner app all talk to this one API.
 
 > The full build plan is in `../docs/Backend Development Plan.md`, and every decision is in `../docs/context/DECISIONS.md`.
@@ -553,7 +553,7 @@ Admin ─┬─ Sub-Admins (no zone; work by areas)
 - **Every change** is audited and runs in one transaction. Moving or deactivating someone **logs them out** (`revokeAllSessions`).
 - **Moves only change the future.** Old records keep their old manager and zone.
 - **"Reassign first":** an ASM can't be deactivated or moved to another zone while they have Sales Executives or partners; a Zonal Head can't be deactivated while in charge of a zone (DEC-057, DEC-059, DEC-066).
-- Leads, tasks and requests don't exist yet. `TODO(Modules 11–13)` comments in `user.service.ts` and `team.service.ts` mark where they join the hand-back and block rules.
+- **Requests (Module 11):** a Sales Executive handling an unfinished request can't be deactivated or moved; a partner with an open request can't be transferred or have their Sales Executive changed / removed (section 17.1). Tasks don't exist yet: `TODO(Module 12)` comments in `user.service.ts` and `team.service.ts` mark where they join.
 
 ### 10.2 Endpoints
 
@@ -565,7 +565,7 @@ Admin ─┬─ Sub-Admins (no zone; work by areas)
 | `POST /api/zones/:id/zonal-head` | Admin | Put a zoneless Zonal Head in charge; ASMs follow; the old one keeps no zone |
 | `POST /api/users` | Admin, Zonal Head, ASM | Add staff (role must be below yours; manager and zone filled in) |
 | `GET /api/users`, `GET /api/users/:id` | Admin, Zonal Head, ASM | Scoped list (filters) and detail (with team counts) |
-| `GET /api/users/picker` | Admin, Tasks / Leads & Requests Sub-Admins | Active field staff for "assign to" dropdowns |
+| `GET /api/users/picker` | Admin, Tasks / Requests Sub-Admins | Active field staff for "assign to" dropdowns |
 | `PATCH /api/users/:id` | Admin, Zonal Head | Name, phone, email (new phone → logged out) |
 | `PATCH /api/users/me` | Any staff | My own name and email (never the phone) |
 | `POST /api/users/:id/deactivate`, `/reactivate` | By role (see DEC-065) | SE → partners go back to the ASM |
@@ -860,7 +860,55 @@ requested ──approve──► approved ──mark-paid──► paid ──ma
 
 ---
 
-## 17. Rules every feature must follow
+## 17. Requests (Module 11)
+
+### 17.1 How a request works
+
+A verified partner asks for a **shipment** (priced) or a free **sample** from their app. "Leads" are the same thing: there is no separate leads feature (DEC-157). It goes **automatically** to the partner's Sales Executive, or to their ASM if they have none. The handler meets the partner, agrees **one total price** (whole rupees, shipments only) and moves the request stage by stage. **No reward points are involved** (`src/services/request.service.ts`, DEC-157 – DEC-173).
+
+```
+SHIPMENT
+requested ─► accepted (price) ─► payment_received ─► processing ─► dispatched ─► delivered ─► completed
+    │             │                    │                  │
+    └─ rejected   └── cancelled        └──── cancelled ───┘
+                      (no money)              ─► refund_initiated ─► refunded
+
+SAMPLE (free): requested ─► accepted ─► processing ─► dispatched ─► delivered ─► completed
+               (rejected from requested; cancelled from accepted / processing)
+```
+
+- **Every move is permanent:** no skipping, no going back (DEC-162). The rules are in `stepAllowed`; a wrong stage → 409 `REQUEST_WRONG_STATUS`. Pressed again → 200 `alreadyDone`.
+- **Open** (`OPEN_REQUEST_WHERE`) = not finished. **Finished** = completed, rejected, cancelled with no money received, refunded. A request cancelled **after payment** stays open until refunded.
+- **Creating** (`createRequest`): one transaction. Locks the partner's `users` row (share) then `partner_profiles` row (update): this partner's requests wait in line and a transfer / Sales Executive change can't happen meanwhile. Then the `Idempotency-Key` check (same rule as payouts), every product through `assertProductUsable(id, "request")` (name and SKU copied), handler = Sales Executive else owning ASM, zone + owning ASM copied, number `REQ-<year>-<6 digits>` from an advisory lock, items, first timeline row, audit `request.create`.
+- **Handler steps** (`handlerStepInTx`): lock the request row, then check the caller is on the handler side (`handlerWhere`: the Sales Executive handling it; the ASM for their own and their Sales Executives' requests), else 404. Accept needs `agreedAmount` for a shipment (refused for a sample). Payment received / refunded: date (past allowed, not future, India time; refund not before payment), mode `cash` / `upi` / `cheque` / `bank`, reference (required unless cash), optional receipt (upload purpose `request_receipt`, checked in R2 **before** the transaction). Payment / refund details can't be corrected (DEC-170). Each step: one timeline row (`partner_request_events`, who / when / reason) + audit `request.<step>`.
+- **Cancel:** the partner (`cancelMyRequestInTx`) or the handler, from requested up to processing; reason 10–500. After payment → the handler does refund_initiated → refunded (always the full agreed amount).
+- **Hand-overs** (`handOverInTx`, ASM only): assign to / move between their **active** Sales Executives, or take back, at any open stage, with a reason; locks the Sales Executive's row so they can't be deactivated meanwhile. Only that request changes, not the partner's Sales Executive.
+- **Blocks while requests are open** (409 `OPEN_REQUESTS`, `details.openRequests`; DEC-165, DEC-172): partner transfer; changing or removing the partner's Sales Executive (a **first** one is allowed) — `countOpenRequestsOfPartner`; Sales Executive deactivate or move to another ASM — `countOpenRequestsHandledBy`, counted **after** their partner links are cleared so a request being saved is seen. Every one of these locks the rows in the same order as creating a request (no deadlocks).
+- **India time:** "today" for dates is the IST calendar day (`src/utils/istDate.ts`, DEC-169).
+- **What the partner sees:** stages with dates only (no staff names, no hand-overs, no payment details), the agreed price, the reject / cancel reason, and the **current** handler's name and phone.
+- Not built (DEC-158, DEC-164, DEC-170): notifications, receipt / invoice, payment corrections, dispatch details (vehicle, LR), proof of delivery, Zonal Head / Sub-Admin / Admin actions (view only for now), a standalone all-requests list.
+
+### 17.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `POST /api/partner/requests` | `requests.create` + verified partner | Send a request; 201 new, 200 retry. Needs `Idempotency-Key` |
+| `GET /api/partner/requests` | `requests.view` + verified partner | My requests, newest first; filters `status`, `category` |
+| `GET /api/partner/requests/:id` | `requests.view` + verified partner | One of my requests (someone else's → 404) |
+| `POST /api/partner/requests/:id/cancel` | `requests.create` + verified partner | Cancel before dispatched, with a reason |
+| `GET /api/requests/worklist` | `requests.handle` | Requests I handle (ASM: + my Sales Executives'); open by default (`state`); filters `status`, `category`, `handlerId`, `search`, `from`, `to` |
+| `GET /api/requests/:id` | `requests.view` (scope) | Full details: payment / refund with receipts, reasons, timeline with names and hand-overs |
+| `POST /api/requests/:id/accept` · `reject` · `payment-received` · `processing` · `dispatched` · `delivered` · `completed` · `cancel` · `refund-initiated` · `refunded` | `requests.handle` (handler side) | One stage step each |
+| `POST /api/requests/:id/assign` · `take-back` | `requests.delegate` (ASM) | Hand-overs, with a reason |
+| `GET /api/partners/:id/requests` | `requests.view` (scope) | A partner's request history: counts (total, open, by kind, by stage, completed shipments count + ₹) and the list |
+
+- View scope (`scopeForRequests` in `scope.service.ts`): Admin and the Requests Sub-Admin all; Zonal Head partners now in their zone; ASM requests handled by them or their Sales Executives **plus** all requests of partners they own now; Sales Executive only the ones they handle now; Partner their own. **Admin, Sub-Admin and Zonal Head are view only for now** (DEC-164); there is no standalone list — they go through the partner.
+- Partner 360 has a `requests` box for staff with `requests.view` (`requestsBoxFor360`); "My Team" (`GET /api/team`) shows open requests per Sales Executive and for the team.
+- API docs: `docs/api/requests.openapi.yaml` (also `partners` 0.8.0, `uploads` 0.4.0, `users` 0.8.0, `auth` 0.4.2, `settings-permissions` 0.2.2). Manual test plan: `docs/testing/Module 11 complete testing.md`.
+
+---
+
+## 18. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -880,7 +928,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 18. Adding a new feature (checklist)
+## 19. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -894,7 +942,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 19. Not in yet
+## 20. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

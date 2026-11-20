@@ -10,6 +10,11 @@ import { recordAudit } from "./audit.service.js";
 import { buildPartnerDetail } from "./partnerDetail.service.js";
 import { assertInScope, scopeForPartners, scopeForStaff } from "./scope.service.js";
 import { payoutsBoxFor360 } from "./payout.service.js";
+import {
+  countOpenRequestsOfPartner,
+  OpenRequestsError,
+  requestsBoxFor360,
+} from "./request.service.js";
 import { pointsBoxFor360 } from "./wallet.service.js";
 
 /**
@@ -18,6 +23,8 @@ import { pointsBoxFor360 } from "./wallet.service.js";
  * - Assign / unassign a Sales Executive: the owning ASM only.
  * - Move to another ASM: Zonal Head (own zone) or Admin (any zone). Clears the SE.
  * - Active and suspended partners only. The partner is not logged out.
+ * - Module 11 (DEC-165, DEC-172): a partner with an open request can't be moved, and their
+ *   Sales Executive can't be removed or changed (giving a first one is allowed).
  */
 
 // ---- Partner list and Partner 360 (Module 5 T13; DEC-083, DEC-093, DEC-105) ----
@@ -126,12 +133,18 @@ export async function getPartner360(me: AuthUser, scope: PermissionScope, id: st
     }),
     { user: me, entity: "partner", id }
   );
-  const [detail, points, payouts] = await Promise.all([
+  const [detail, points, payouts, requests] = await Promise.all([
     buildPartnerDetail(id),
     pointsBoxFor360(me, id),
     payoutsBoxFor360(me, id),
+    requestsBoxFor360(me, id),
   ]);
-  return { ...detail, ...(points && { points }), ...(payouts && { payouts }) };
+  return {
+    ...detail,
+    ...(points && { points }),
+    ...(payouts && { payouts }),
+    ...(requests && { requests }),
+  };
 }
 
 /** What a partner looks like in these replies. */
@@ -218,6 +231,23 @@ export async function assignSalesExecutive(
   }
 
   await prisma.$transaction(async (tx) => {
+    // Changing an existing Sales Executive is refused while the partner has an open
+    // request; giving a first one is allowed (DEC-165, DEC-172). Checked under the lock,
+    // on the Sales Executive as it is now.
+    const openRequests = await countOpenRequestsOfPartner(tx, partnerId);
+    const current = await tx.partnerProfile.findUnique({
+      where: { userId: partnerId },
+      select: { salesExecutiveId: true },
+    });
+    const currentSe = current?.salesExecutiveId ?? null;
+    if (currentSe !== null && currentSe !== salesExecutiveId && openRequests > 0) {
+      throw new OpenRequestsError(
+        `This partner has ${openRequests} open request(s), so their Sales Executive can't be ` +
+          "changed until they are finished.",
+        openRequests
+      );
+    }
+
     await tx.partnerProfile.upsert({
       where: { userId: partnerId },
       create: { userId: partnerId, salesExecutiveId },
@@ -227,7 +257,7 @@ export async function assignSalesExecutive(
       actorId: me.id,
       action: "partner.assign_sales_executive",
       entity: { type: "user", id: partnerId },
-      before: { salesExecutiveId: partner.salesExecutiveId },
+      before: { salesExecutiveId: currentSe },
       after: { salesExecutiveId },
     });
   });
@@ -247,6 +277,15 @@ export async function unassignSalesExecutive(
   }
 
   await prisma.$transaction(async (tx) => {
+    // Refused while the partner has an open request (DEC-165).
+    const openRequests = await countOpenRequestsOfPartner(tx, partnerId);
+    if (openRequests > 0) {
+      throw new OpenRequestsError(
+        `This partner has ${openRequests} open request(s), so their Sales Executive can't be ` +
+          "removed until they are finished.",
+        openRequests
+      );
+    }
     await tx.partnerProfile.update({
       where: { userId: partnerId },
       data: { salesExecutiveId: null },
@@ -279,6 +318,16 @@ export async function transferPartner(
   }
 
   await prisma.$transaction(async (tx) => {
+    // Refused while the partner has an open request (DEC-165).
+    const openRequests = await countOpenRequestsOfPartner(tx, partnerId);
+    if (openRequests > 0) {
+      throw new OpenRequestsError(
+        `This partner has ${openRequests} open request(s), so they can't be moved to another ` +
+          "ASM until the requests are finished.",
+        openRequests
+      );
+    }
+
     // A Zonal Head only finds ASMs in their zone, so moves across zones are Admin only.
     const asm = assertInScope(
       await tx.user.findFirst({

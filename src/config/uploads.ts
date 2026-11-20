@@ -3,7 +3,8 @@ import { ROLE, type RoleId } from "./roles.js";
 
 /**
  * What files can be uploaded, and for what (Module 5 T3, DEC-074, DEC-084; Module 6 T4, DEC-113).
- * Module 10 T4 adds `payout_proof` (DEC-155). Later modules add more (task photos, ticket photos).
+ * Module 10 T4 adds `payout_proof` (DEC-155); Module 11 T4 `request_receipt` (DEC-170).
+ * Later modules add more (task photos, ticket photos).
  */
 
 const MB = 1024 * 1024;
@@ -74,6 +75,26 @@ export const UPLOAD_PURPOSES = {
     folder: "payouts",
     roles: [ROLE.ADMIN, ROLE.SUB_ADMIN, ROLE.ZONAL_HEAD],
     capability: "payouts.mark_paid",
+    contentTypes: [
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+    ],
+    typesLabel: "a PDF or an image (JPG, PNG, WebP, HEIC)",
+    maxBytes: 5 * MB,
+  },
+  /**
+   * Receipt for money received or refunded on a request, optional, added only at that step
+   * (Module 11 T4, DEC-164, DEC-170): the handler side (ASM, Sales Executive). Same file rules
+   * as payout proof. The partner app does not show it (DEC-169).
+   */
+  request_receipt: {
+    folder: "requests",
+    roles: [ROLE.ASM, ROLE.SALES_EXECUTIVE],
+    capability: "requests.handle",
     contentTypes: [
       "application/pdf",
       "image/jpeg",

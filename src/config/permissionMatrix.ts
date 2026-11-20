@@ -12,7 +12,9 @@ import { ROLE, type RoleId } from "./roles.js";
  * (for an ASM also their Sales Executives' records).
  *
  * Boxes still waiting on a doubt have NO entry, so they are refused until decided:
- * D11.11 (ASM takes back a request), D15.1 (field staff raise tickets), D17.2 (reverse scan).
+ * D15.1 (field staff raise tickets), D17.2 (reverse scan).
+ * Requests (Module 11): Admin, Sub-Admin and Zonal Head view only (DEC-164); the ASM
+ * handles and assigns / takes back (D11.11 → DEC-160); no `leads.*` actions (DEC-157).
  * Answered: D4.2 → ASM row below (DEC-056); D4.8 → "no", so no Sub-Admin staff rows (DEC-058);
  * D4.5 → across zones is Admin only (DEC-057): no extra row, the services enforce it (a
  * Zonal Head's "scoped" transfer only finds people in their own zone).
@@ -56,11 +58,6 @@ const ADMIN: RoleMatrix = {
   "payouts.approve": "full",
   "payouts.mark_paid": "full",
   "requests.view": "full",
-  "requests.handle": "full",
-  "requests.delegate": "full",
-  "leads.view": "full",
-  "leads.manage": "full",
-  "leads.assign": "full",
   "tasks.assign": "full",
   "tasks.view": "full",
   "notifications.manage": "full",
@@ -102,11 +99,6 @@ const ZONAL_HEAD: RoleMatrix = {
   "payouts.approve": "scoped",
   "payouts.mark_paid": "scoped",
   "requests.view": "scoped",
-  "requests.handle": "scoped",
-  "requests.delegate": "scoped",
-  "leads.view": "scoped",
-  "leads.manage": "scoped",
-  "leads.assign": "scoped",
   "tasks.assign": "scoped",
   "tasks.view": "scoped",
   "tasks.complete": "own",
@@ -131,10 +123,6 @@ const ASM: RoleMatrix = {
   "requests.view": "own",
   "requests.handle": "own",
   "requests.delegate": "own",
-  "leads.view": "own",
-  "leads.manage": "own",
-  "leads.convert": "own",
-  "leads.assign": "own",
   "tasks.assign": "own",
   "tasks.view": "own",
   "tasks.complete": "own",
@@ -152,9 +140,6 @@ const SALES_EXECUTIVE: RoleMatrix = {
   "payouts.view": "own",
   "requests.view": "own",
   "requests.handle": "own",
-  "leads.view": "own",
-  "leads.manage": "own",
-  "leads.convert": "own",
   "tasks.view": "own",
   "tasks.complete": "own",
 };

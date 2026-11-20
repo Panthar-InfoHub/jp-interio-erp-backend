@@ -37,13 +37,14 @@ enum ZoneStatus {
 }
 
 /// The feature areas an Admin can give a Sub-Admin (DEC-019).
+/// `requests` was `leads_requests` until Module 11 (DEC-157, DEC-159).
 enum SubAdminArea {
   products
   qr
   rewards
   partners
   tasks
-  leads_requests
+  requests
 
   @@map("sub_admin_area")
 }
@@ -250,6 +251,66 @@ enum PayoutPaidMethod {
   @@map("payout_paid_method")
 }
 
+/// Shipment (priced) or free sample (DEC-007, DEC-158).
+enum RequestCategory {
+  shipment
+  sample
+
+  @@map("request_category")
+}
+
+/// Where a shipment / sample request is in its life (Module 11, DEC-159 – DEC-162).
+/// Every move is permanent: no skipping, no going back.
+/// Shipment: requested → accepted → payment_received → processing → dispatched → delivered → completed.
+/// Sample (free): requested → accepted → processing → dispatched → delivered → completed.
+/// requested → rejected. accepted / payment_received / processing → cancelled;
+/// cancelled after payment → refund_initiated → refunded.
+enum RequestStatus {
+  /// Sent by the partner from the app.
+  requested
+  /// Handler agreed the price with the partner (shipments; samples have no price).
+  accepted
+  /// Only from requested; reason required. End stage.
+  rejected
+  /// Shipments only: money received (date, mode, reference, optional receipt).
+  payment_received
+  processing
+  dispatched
+  delivered
+  /// End stage.
+  completed
+  /// By the partner or the handler, before dispatched; reason required. End stage unless
+  /// money was received, then the refund stages follow.
+  cancelled
+  refund_initiated
+  /// Full agreed amount returned (date, mode, reference, optional receipt). End stage.
+  refunded
+
+  @@map("request_status")
+}
+
+/// How money was received or refunded (DEC-160). Reference number required except cash.
+enum RequestPaymentMode {
+  cash
+  upi
+  cheque
+  bank
+
+  @@map("request_payment_mode")
+}
+
+/// What one history row records (DEC-166).
+enum RequestEventType {
+  /// The partner sent the request (to status `requested`).
+  created
+  /// A stage move (from → to), with the reason for reject / cancel.
+  status_change
+  /// The ASM gave the request to a Sales Executive, took it back, or moved it (DEC-160).
+  handler_change
+
+  @@map("request_event_type")
+}
+
 // ---- Models ----
 
 /// The 6 fixed roles. Seeded, never created from the API.
@@ -297,9 +358,10 @@ model Zone {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  users   User[]
-  scans   Scan[]
-  payouts Payout[]
+  users           User[]
+  scans           Scan[]
+  payouts         Payout[]
+  partnerRequests PartnerRequest[]
 
   @@map("zones")
 }
@@ -331,36 +393,44 @@ model User {
   children User[] @relation("UserParent")
   zone     Zone?  @relation(fields: [zoneId], references: [id])
 
-  subAdminAreas         SubAdminAreaGrant[]  @relation("GrantHolder")
-  subAdminAreasGranted  SubAdminAreaGrant[]  @relation("GrantGiver")
-  partnerProfile        PartnerProfile?      @relation("ProfileOwner")
-  assignedPartners      PartnerProfile[]     @relation("ProfileSalesExecutive")
-  onboardedPartners     PartnerProfile[]     @relation("ProfileOnboardedBy")
+  subAdminAreas         SubAdminAreaGrant[]   @relation("GrantHolder")
+  subAdminAreasGranted  SubAdminAreaGrant[]   @relation("GrantGiver")
+  partnerProfile        PartnerProfile?       @relation("ProfileOwner")
+  assignedPartners      PartnerProfile[]      @relation("ProfileSalesExecutive")
+  onboardedPartners     PartnerProfile[]      @relation("ProfileOnboardedBy")
   settingsUpdated       Setting[]
   auditEntries          AuditLog[]
   sessions              Session[]
-  kycDocumentsUploaded  KycDocument[]        @relation("DocUploadedBy")
-  payoutAccountsAdded   PayoutAccount[]      @relation("PayoutAddedBy")
-  payoutAccountsEdited  PayoutAccount[]      @relation("PayoutUpdatedBy")
-  payoutAccountsRemoved PayoutAccount[]      @relation("PayoutRemovedBy")
-  kycReviewsDone        KycReview[]          @relation("ReviewActor")
-  kycReviewsAsmPicked   KycReview[]          @relation("ReviewAssignedAsm")
-  qrBatchesCreated      QrBatch[]            @relation("QrBatchCreatedBy")
-  qrBatchesVoided       QrBatch[]            @relation("QrBatchVoidedBy")
+  kycDocumentsUploaded  KycDocument[]         @relation("DocUploadedBy")
+  payoutAccountsAdded   PayoutAccount[]       @relation("PayoutAddedBy")
+  payoutAccountsEdited  PayoutAccount[]       @relation("PayoutUpdatedBy")
+  payoutAccountsRemoved PayoutAccount[]       @relation("PayoutRemovedBy")
+  kycReviewsDone        KycReview[]           @relation("ReviewActor")
+  kycReviewsAsmPicked   KycReview[]           @relation("ReviewAssignedAsm")
+  qrBatchesCreated      QrBatch[]             @relation("QrBatchCreatedBy")
+  qrBatchesVoided       QrBatch[]             @relation("QrBatchVoidedBy")
   qrBatchExports        QrBatchExport[]
-  qrCodesScanned        QrCode[]             @relation("QrCodeScannedBy")
-  wallet                Wallet?              @relation("WalletOwner")
-  ledgerEntries         RewardsLedgerEntry[] @relation("LedgerPartner")
-  ledgerEntriesMade     RewardsLedgerEntry[] @relation("LedgerCreatedBy")
-  scans                 Scan[]               @relation("ScanPartner")
-  scansAsOwningAsm      Scan[]               @relation("ScanOwningAsm")
+  qrCodesScanned        QrCode[]              @relation("QrCodeScannedBy")
+  wallet                Wallet?               @relation("WalletOwner")
+  ledgerEntries         RewardsLedgerEntry[]  @relation("LedgerPartner")
+  ledgerEntriesMade     RewardsLedgerEntry[]  @relation("LedgerCreatedBy")
+  scans                 Scan[]                @relation("ScanPartner")
+  scansAsOwningAsm      Scan[]                @relation("ScanOwningAsm")
   scanAttempts          ScanAttempt[]
-  payouts               Payout[]             @relation("PayoutPartner")
-  payoutsAsOwningAsm    Payout[]             @relation("PayoutOwningAsm")
-  payoutsApproved       Payout[]             @relation("PayoutApprovedBy")
-  payoutsDeclined       Payout[]             @relation("PayoutDeclinedBy")
-  payoutsPaid           Payout[]             @relation("PayoutPaidBy")
-  payoutsFailed         Payout[]             @relation("PayoutFailedBy")
+  payouts               Payout[]              @relation("PayoutPartner")
+  payoutsAsOwningAsm    Payout[]              @relation("PayoutOwningAsm")
+  payoutsApproved       Payout[]              @relation("PayoutApprovedBy")
+  payoutsDeclined       Payout[]              @relation("PayoutDeclinedBy")
+  payoutsPaid           Payout[]              @relation("PayoutPaidBy")
+  payoutsFailed         Payout[]              @relation("PayoutFailedBy")
+  requests              PartnerRequest[]      @relation("RequestPartner")
+  requestsHandled       PartnerRequest[]      @relation("RequestHandler")
+  requestsAsOwningAsm   PartnerRequest[]      @relation("RequestOwningAsm")
+  requestPaymentsMade   PartnerRequest[]      @relation("RequestPaymentBy")
+  requestRefundsMade    PartnerRequest[]      @relation("RequestRefundBy")
+  requestEventsDone     PartnerRequestEvent[] @relation("RequestEventActor")
+  requestEventsFrom     PartnerRequestEvent[] @relation("RequestEventFromHandler")
+  requestEventsTo       PartnerRequestEvent[] @relation("RequestEventToHandler")
 
   @@index([roleId])
   @@index([parentId])
@@ -612,11 +682,12 @@ model Product {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  brand     Brand           @relation(fields: [brandId], references: [id])
-  category  ProductCategory @relation(fields: [categoryId], references: [id])
-  qrBatches QrBatch[]
-  qrCodes   QrCode[]
-  scans     Scan[]
+  brand        Brand                @relation(fields: [brandId], references: [id])
+  category     ProductCategory      @relation(fields: [categoryId], references: [id])
+  qrBatches    QrBatch[]
+  qrCodes      QrCode[]
+  scans        Scan[]
+  requestItems PartnerRequestItem[]
 
   @@index([brandId])
   @@index([categoryId])
@@ -941,6 +1012,142 @@ model Payout {
   @@index([owningAsmId, status])
   @@index([createdAt])
   @@map("payouts")
+}
+
+// ---------------------------------------------------------------------------
+// Requests (Module 11; "leads" are the same thing, DEC-157). A verified partner asks
+// for a shipment or a free sample; the handler (Sales Executive, or the ASM) agrees one
+// total price and moves it stage by stage (DEC-157 – DEC-166). No reward points involved.
+// Nothing here is ever deleted.
+// ---------------------------------------------------------------------------
+
+/// One shipment / sample request. Who did each stage and when lives in
+/// `partner_request_events` (DEC-166); every change is also audited by the service.
+model PartnerRequest {
+  id        String          @id @default(uuid(7)) @db.Uuid
+  /// Shown to people: `REQ-<year>-<6 digits>`, e.g. REQ-2026-000123 (DEC-163).
+  requestNo String          @unique @map("request_no") @db.VarChar(20)
+  /// UTC year and running number inside that year; the counter restarts at 1 each year.
+  year      Int             @db.SmallInt
+  seq       Int
+  partnerId String          @map("partner_id") @db.Uuid
+  category  RequestCategory
+  status    RequestStatus   @default(requested)
+  /// Who handles it now: the partner's Sales Executive, else the owning ASM (DEC-158);
+  /// the ASM can change it (DEC-160).
+  handlerId String          @map("handler_id") @db.Uuid
+
+  /// The partner's zone and owning ASM at request time, for reports. A partner with an
+  /// open request can't be transferred (DEC-165), so these stay right while it is open.
+  zoneId      String? @map("zone_id") @db.Uuid
+  owningAsmId String? @map("owning_asm_id") @db.Uuid
+
+  /// One free-text box, pre-filled from the profile, editable (DEC-163, DEC-166).
+  deliveryAddress       String   @map("delivery_address") @db.VarChar(500)
+  /// Not in the past when created (checked in the service).
+  preferredDeliveryDate DateTime @map("preferred_delivery_date") @db.Date
+  notes                 String?  @db.VarChar(500)
+
+  /// One total amount in rupees, typed at Accept; never changed (DEC-159, DEC-161).
+  /// Shipments only; empty for samples (free, DEC-158).
+  agreedAmount Decimal? @map("agreed_amount") @db.Decimal(12, 2)
+
+  /// From the `Idempotency-Key` header; one key per partner makes only one request.
+  idempotencyKey String @map("idempotency_key") @db.VarChar(100)
+
+  // ---- Payment received (shipments only, DEC-160). Date may be past, not future (DEC-166).
+  paymentDate         DateTime?           @map("payment_date") @db.Date
+  paymentMode         RequestPaymentMode? @map("payment_mode")
+  /// Required except for cash (DEC-163).
+  paymentReference    String?             @map("payment_reference") @db.VarChar(100)
+  /// Optional receipt photo / PDF (public R2 URL, DEC-164).
+  paymentReceiptUrl   String?             @map("payment_receipt_url") @db.VarChar(1000)
+  paymentRecordedById String?             @map("payment_recorded_by") @db.Uuid
+  paymentRecordedAt   DateTime?           @map("payment_recorded_at") @db.Timestamptz(3)
+
+  // ---- Refunded (always the full agreed amount, DEC-163). Same fields as payment.
+  refundDate         DateTime?           @map("refund_date") @db.Date
+  refundMode         RequestPaymentMode? @map("refund_mode")
+  refundReference    String?             @map("refund_reference") @db.VarChar(100)
+  refundReceiptUrl   String?             @map("refund_receipt_url") @db.VarChar(1000)
+  refundRecordedById String?             @map("refund_recorded_by") @db.Uuid
+  refundRecordedAt   DateTime?           @map("refund_recorded_at") @db.Timestamptz(3)
+
+  /// Free text, 10 – 500 characters (DEC-160, DEC-163). Also saved on the history row.
+  rejectReason String? @map("reject_reason") @db.VarChar(500)
+  cancelReason String? @map("cancel_reason") @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  partner           User                  @relation("RequestPartner", fields: [partnerId], references: [id])
+  handler           User                  @relation("RequestHandler", fields: [handlerId], references: [id])
+  zone              Zone?                 @relation(fields: [zoneId], references: [id])
+  owningAsm         User?                 @relation("RequestOwningAsm", fields: [owningAsmId], references: [id])
+  paymentRecordedBy User?                 @relation("RequestPaymentBy", fields: [paymentRecordedById], references: [id])
+  refundRecordedBy  User?                 @relation("RequestRefundBy", fields: [refundRecordedById], references: [id])
+  items             PartnerRequestItem[]
+  events            PartnerRequestEvent[]
+
+  @@unique([year, seq])
+  @@unique([partnerId, idempotencyKey])
+  @@index([partnerId, status])
+  @@index([partnerId, createdAt])
+  @@index([handlerId, status])
+  @@index([owningAsmId, status])
+  @@index([zoneId, status])
+  @@index([createdAt])
+  @@map("partner_requests")
+}
+
+/// One product in a request. The same product only once per request; no maximum
+/// number of items (DEC-165). Name and SKU are copied at request time (DEC-165).
+model PartnerRequestItem {
+  id          String @id @default(uuid(7)) @db.Uuid
+  requestId   String @map("request_id") @db.Uuid
+  productId   String @map("product_id") @db.Uuid
+  /// More than 0 (checked by Zod / the service, DEC-167).
+  quantity    Int
+  productName String @map("product_name") @db.VarChar(200)
+  productSku  String @map("product_sku") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  request PartnerRequest @relation(fields: [requestId], references: [id])
+  product Product        @relation(fields: [productId], references: [id])
+
+  @@unique([requestId, productId])
+  @@index([productId])
+  @@map("partner_request_items")
+}
+
+/// Insert-only timeline of a request (DEC-166): creation, every stage move (with the
+/// reason for reject / cancel) and every handler change. Who did it and when.
+model PartnerRequestEvent {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  requestId     String           @map("request_id") @db.Uuid
+  type          RequestEventType
+  /// Stage moves: from → to. `created`: to = requested.
+  fromStatus    RequestStatus?   @map("from_status")
+  toStatus      RequestStatus?   @map("to_status")
+  /// Handler changes: from → to.
+  fromHandlerId String?          @map("from_handler_id") @db.Uuid
+  toHandlerId   String?          @map("to_handler_id") @db.Uuid
+  /// Reject / cancel reason (DEC-166).
+  reason        String?          @db.VarChar(500)
+  /// Who did it: the partner (create, partner cancel) or a staff member.
+  actorId       String           @map("actor_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  request     PartnerRequest @relation(fields: [requestId], references: [id])
+  actor       User           @relation("RequestEventActor", fields: [actorId], references: [id])
+  fromHandler User?          @relation("RequestEventFromHandler", fields: [fromHandlerId], references: [id])
+  toHandler   User?          @relation("RequestEventToHandler", fields: [toHandlerId], references: [id])
+
+  @@index([requestId, createdAt])
+  @@index([actorId])
+  @@map("partner_request_events")
 }
 
 /// Business values the Admin can change without a code change.

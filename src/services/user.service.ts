@@ -17,6 +17,7 @@ import type {
 } from "../validators/user.schema.js";
 import { recordAudit } from "./audit.service.js";
 import { assertCanCreate, assertCanManage } from "./hierarchy.service.js";
+import { countOpenRequestsHandledBy, OpenRequestsError } from "./request.service.js";
 import { revokeAllSessions } from "./session.service.js";
 import { getPermissionScope } from "./permission.service.js";
 import { assertInScope, scopeForStaff } from "./scope.service.js";
@@ -546,7 +547,17 @@ export async function deactivateUser(me: AuthUser, id: string) {
           data: { salesExecutiveId: null },
         });
         returned = result.count;
-        // TODO(Modules 11–13): also hand leads, open tasks and pending requests to the ASM.
+        // Refused while they handle an unfinished request (DEC-172). Counted after the
+        // update above, so a request being saved for one of their partners is seen too.
+        const openRequests = await countOpenRequestsHandledBy(tx, id);
+        if (openRequests > 0) {
+          throw new OpenRequestsError(
+            `This Sales Executive is handling ${openRequests} unfinished request(s). ` +
+              "Their ASM must move them to someone else (or they must be finished) first.",
+            openRequests
+          );
+        }
+        // TODO(Module 12): open tasks.
         break;
       }
       case ROLE.ASM: {
@@ -556,7 +567,8 @@ export async function deactivateUser(me: AuthUser, id: string) {
           }),
           tx.user.count({ where: { parentId: id, roleId: ROLE.PARTNER, ...NOT_DEACTIVATED } }),
         ]);
-        // TODO(Modules 11–13): also block on open leads, tasks and requests.
+        // Requests need no extra check: an ASM only handles their own partners' requests,
+        // and having partners already blocks this. TODO(Module 12): open tasks.
         if (salesExecutives > 0 || partners > 0) {
           throw new ConflictError(
             `This ASM still has ${salesExecutives} Sales Executive(s) and ${partners} partner(s). ` +
@@ -753,6 +765,16 @@ async function moveSalesExecutive(
       where: { salesExecutiveId: target.id },
       data: { salesExecutiveId: null },
     });
+    // Refused while they handle an unfinished request (DEC-172); counted after the update
+    // above so a request being saved for one of their partners is seen too.
+    const openRequests = await countOpenRequestsHandledBy(tx, target.id);
+    if (openRequests > 0) {
+      throw new OpenRequestsError(
+        `This Sales Executive is handling ${openRequests} unfinished request(s). ` +
+          "Their ASM must move them to someone else (or they must be finished) first.",
+        openRequests
+      );
+    }
 
     await tx.user.update({
       where: { id: target.id },

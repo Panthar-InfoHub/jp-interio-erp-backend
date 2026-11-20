@@ -80,6 +80,46 @@ export function scopeForStaff(user: ScopeUser, scope: PermissionScope): Prisma.U
 }
 
 /**
+ * Requests this user may VIEW (Module 11, `requests.view`; DEC-164, DEC-173).
+ * - full:   all requests (Admin, Requests Sub-Admin).
+ * - scoped: requests of partners now in the user's zone (Zonal Head; the partner's current
+ *           zone, like payouts).
+ * - own:    ASM → requests handled by them or their Sales Executives, plus every request
+ *           of partners they own now (DEC-173 option B); Sales Executive → only requests
+ *           they handle now; Partner → their own.
+ * Moving stages uses `handlerWhere` in request.service.ts instead (handler side only).
+ */
+export function scopeForRequests(
+  user: ScopeUser,
+  scope: PermissionScope
+): Prisma.PartnerRequestWhereInput {
+  const none: Prisma.PartnerRequestWhereInput = { id: { in: [] } };
+  switch (scope) {
+    case "full":
+      return {};
+    case "scoped":
+      return user.zoneId ? { partner: { zoneId: user.zoneId } } : none;
+    case "own":
+      switch (user.roleId) {
+        case ROLE.ASM:
+          return {
+            OR: [
+              { handlerId: user.id },
+              { handler: { parentId: user.id, roleId: ROLE.SALES_EXECUTIVE } },
+              { partner: { parentId: user.id, roleId: ROLE.PARTNER } },
+            ],
+          };
+        case ROLE.SALES_EXECUTIVE:
+          return { handlerId: user.id };
+        case ROLE.PARTNER:
+          return { partnerId: user.id };
+        default:
+          return none;
+      }
+  }
+}
+
+/**
  * For get-by-ID endpoints. Load the record WITH the scope filter, then pass it here:
  *
  *   const partner = await prisma.user.findFirst({

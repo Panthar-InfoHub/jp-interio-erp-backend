@@ -33,7 +33,7 @@ export const CAPABILITIES = {
   },
   "users.view": { subAdmin: "never", description: "Staff list, staff detail, org tree" },
   "users.pick": {
-    subAdmin: ["tasks", "leads_requests"],
+    subAdmin: ["tasks", "requests"],
     description: "Read-only staff picker (name, role, zone) to assign work",
   },
   "users.create": {
@@ -146,32 +146,25 @@ export const CAPABILITIES = {
     description: "Mark a payout paid (method, transaction ID, proof); correct paid details",
   },
 
-  // ---- Leads and requests (Modules 11, 13) ----
+  // ---- Requests (Module 11; leads are the same thing and have no actions, DEC-157) ----
   "requests.create": {
     subAdmin: "never",
-    description: "Raise a shipment or sample request",
+    description: "Raise a shipment or sample request; cancel own request",
   },
   "requests.view": {
-    subAdmin: ["leads_requests"],
+    subAdmin: ["requests"],
     description: "See requests and a partner's request history",
   },
+  // Field staff only for now: Admin, Sub-Admins and Zonal Heads view only (DEC-164).
   "requests.handle": {
-    subAdmin: ["leads_requests"],
-    description: "Enter the price, confirm collection, accept or reject a request",
+    subAdmin: "never",
+    description:
+      "Move a request through its stages (accept with price, reject, payment, dispatch, " +
+      "deliver, complete, cancel, refund)",
   },
   "requests.delegate": {
-    subAdmin: ["leads_requests"],
-    description: "Give a request to a Sales Executive, or take it back",
-  },
-  "leads.view": { subAdmin: ["leads_requests"], description: "See leads and the pipeline" },
-  "leads.manage": {
-    subAdmin: ["leads_requests"],
-    description: "Create and edit leads, move stage",
-  },
-  "leads.convert": { subAdmin: "never", description: "Convert a Won lead into a partner" },
-  "leads.assign": {
-    subAdmin: ["leads_requests"],
-    description: "Assign or re-assign a lead to someone",
+    subAdmin: "never",
+    description: "Give a request to one of my Sales Executives, take it back or move it (ASM)",
   },
 
   // ---- Tasks (Module 12) ----

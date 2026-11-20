@@ -12,6 +12,7 @@ import type {
 } from "../validators/zone.schema.js";
 import { revokeAllSessions } from "./session.service.js";
 import { recordAudit } from "./audit.service.js";
+import { assertNoOpenTasks } from "./task.service.js";
 
 /**
  * Zones (Module 4, Task 1; DEC-060).
@@ -260,6 +261,7 @@ export const reactivateZone = (admin: AuthUser, id: string) => setStatus(admin, 
  * - the old Zonal Head (if any) loses the zone and stays active with no zone;
  * - both are logged out; one audit row.
  * Also fills an empty zone, and is how a Zonal Head moves to another zone.
+ * Refused (409 OPEN_TASKS) while the old Zonal Head has unfinished tasks (DEC-184).
  */
 export async function setZonalHead(admin: AuthUser, zoneId: string, userId: string) {
   const result = await prisma.$transaction(async (tx) => {
@@ -298,6 +300,10 @@ export async function setZonalHead(admin: AuthUser, zoneId: string, userId: stri
       where: { zoneId, roleId: ROLE.ZONAL_HEAD, ...NOT_DEACTIVATED },
       select: { id: true },
     });
+    // The old Zonal Head loses the zone: refused while they have unfinished tasks (DEC-184).
+    if (oldHead) {
+      await assertNoOpenTasks(tx, oldHead.id, "The current Zonal Head of this zone");
+    }
 
     // Every Zonal Head linked to the zone loses it (normally just the old one).
     await tx.user.updateMany({

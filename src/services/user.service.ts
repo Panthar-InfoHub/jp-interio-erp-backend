@@ -1,5 +1,5 @@
 import type { Capability } from "../config/capabilities.js";
-import { ROLE, type RoleId } from "../config/roles.js";
+import { ROLE, ROLES, type RoleId } from "../config/roles.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import type { PermissionScope, SubAdminArea } from "../generated/prisma/enums.js";
 import { logger } from "../lib/logger.js";
@@ -21,6 +21,10 @@ import { countOpenRequestsHandledBy, OpenRequestsError } from "./request.service
 import { revokeAllSessions } from "./session.service.js";
 import { getPermissionScope } from "./permission.service.js";
 import { assertInScope, scopeForStaff } from "./scope.service.js";
+import { assertNoOpenTasks, taskCountsFor } from "./task.service.js";
+
+/** "Sales Executive", "ASM", … for messages. */
+const roleName = (roleId: number) => ROLES.find((role) => role.id === roleId)?.name ?? "person";
 
 /**
  * Staff users (Module 4). Task 2: adding staff (DEC-062).
@@ -388,7 +392,12 @@ export async function getUser(me: AuthUser, scope: PermissionScope, id: string) 
   );
 
   const { roleId, zoneId, ...rest } = user;
-  return { ...toStaff(rest), counts: await countTeam({ id, roleId, zoneId }) };
+  const [counts, taskCounts] = await Promise.all([
+    countTeam({ id, roleId, zoneId }),
+    taskCountsFor([id]),
+  ]);
+  // Task numbers for the profile (DEC-184): pending, overdue, given by them and still open.
+  return { ...toStaff(rest), counts, tasks: taskCounts.get(id) };
 }
 
 /**
@@ -557,7 +566,6 @@ export async function deactivateUser(me: AuthUser, id: string) {
             openRequests
           );
         }
-        // TODO(Module 12): open tasks.
         break;
       }
       case ROLE.ASM: {
@@ -568,7 +576,7 @@ export async function deactivateUser(me: AuthUser, id: string) {
           tx.user.count({ where: { parentId: id, roleId: ROLE.PARTNER, ...NOT_DEACTIVATED } }),
         ]);
         // Requests need no extra check: an ASM only handles their own partners' requests,
-        // and having partners already blocks this. TODO(Module 12): open tasks.
+        // and having partners already blocks this. Tasks: checked below for every role.
         if (salesExecutives > 0 || partners > 0) {
           throw new ConflictError(
             `This ASM still has ${salesExecutives} Sales Executive(s) and ${partners} partner(s). ` +
@@ -598,6 +606,10 @@ export async function deactivateUser(me: AuthUser, id: string) {
       }
       // Sub-Admin: nothing to hand over; their areas are kept (DEC-065).
     }
+
+    // Every role: refused while they have unfinished tasks given to them or by them
+    // (DEC-184; replaces DEC-057's "open tasks go back to the ASM").
+    await assertNoOpenTasks(tx, id, `This ${roleName(target.roleId)}`);
 
     await tx.user.update({ where: { id }, data: { status: "deactivated" } });
     await recordAudit(tx, {
@@ -775,6 +787,8 @@ async function moveSalesExecutive(
         openRequests
       );
     }
+    // Refused while they have unfinished tasks (DEC-184).
+    await assertNoOpenTasks(tx, target.id, "This Sales Executive");
 
     await tx.user.update({
       where: { id: target.id },
@@ -818,6 +832,8 @@ async function moveAsm(me: AuthUser, target: MoveTarget, zoneId: string) {
         `Zone "${zone.name}" has no Zonal Head. Appoint the Zonal Head first, then move the ASM.`
       );
     }
+    // Refused while they have unfinished tasks (DEC-184).
+    await assertNoOpenTasks(tx, target.id, "This ASM");
 
     await tx.user.update({ where: { id: target.id }, data: { parentId: zonalHead.id, zoneId } });
     await recordAudit(tx, {

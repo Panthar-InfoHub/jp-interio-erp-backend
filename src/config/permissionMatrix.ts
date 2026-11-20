@@ -71,12 +71,16 @@ const ADMIN: RoleMatrix = {
  * so the two files can never disagree. Whether a given Sub-Admin holds the area is
  * checked in code at request time (sub_admin_areas).
  */
-const SUB_ADMIN: RoleMatrix = Object.fromEntries(
-  CAPABILITY_KEYS.filter((key) => CAPABILITIES[key].subAdmin !== "never").map((key) => [
-    key,
-    "full",
-  ])
-);
+const SUB_ADMIN: RoleMatrix = {
+  ...Object.fromEntries(
+    CAPABILITY_KEYS.filter((key) => CAPABILITIES[key].subAdmin !== "never").map((key) => [
+      key,
+      "full",
+    ])
+  ),
+  // Only their own tasks (DEC-175).
+  "tasks.complete": "own",
+};
 
 /** Zonal Head: their one zone. */
 const ZONAL_HEAD: RoleMatrix = {
@@ -172,11 +176,21 @@ export interface PermissionRow {
 }
 
 /**
+ * Sub-Admin actions the Admin deliberately does NOT get, as an exception to rule G1.
+ * "Complete my own task": nobody can give the Admin a task, and it is not a management
+ * action (DEC-179).
+ */
+const NOT_FOR_ADMIN: readonly Capability[] = ["tasks.complete"];
+
+/**
  * The matrix as table rows. Throws if the matrix breaks rule G1 (the Admin must have
- * every action a Sub-Admin area unlocks), so a mistake stops the seed before saving.
+ * every action a Sub-Admin area unlocks, except `NOT_FOR_ADMIN`), so a mistake stops the
+ * seed before saving.
  */
 export function getPermissionRows(): PermissionRow[] {
-  const missingForAdmin = CAPABILITY_KEYS.filter((key) => SUB_ADMIN[key] && !ADMIN[key]);
+  const missingForAdmin = CAPABILITY_KEYS.filter(
+    (key) => SUB_ADMIN[key] && !ADMIN[key] && !NOT_FOR_ADMIN.includes(key)
+  );
   if (missingForAdmin.length > 0) {
     throw new Error(
       `Permission matrix: the Admin is missing Sub-Admin actions (rule G1): ${missingForAdmin.join(", ")}`

@@ -311,6 +311,27 @@ enum RequestEventType {
   @@map("request_event_type")
 }
 
+/// Where a field task is in its life (Module 12, DEC-175 – DEC-178).
+/// open → in_progress → completed. open / in_progress → cancelled (by the giver, reason
+/// required). completed and cancelled are end stages; a completed task is locked.
+enum TaskStatus {
+  open
+  in_progress
+  completed
+  cancelled
+
+  @@map("task_status")
+}
+
+/// Default medium (DEC-178).
+enum TaskPriority {
+  high
+  medium
+  low
+
+  @@map("task_priority")
+}
+
 // ---- Models ----
 
 /// The 6 fixed roles. Seeded, never created from the API.
@@ -362,6 +383,7 @@ model Zone {
   scans           Scan[]
   payouts         Payout[]
   partnerRequests PartnerRequest[]
+  tasks           Task[]
 
   @@map("zones")
 }
@@ -431,6 +453,11 @@ model User {
   requestEventsDone     PartnerRequestEvent[] @relation("RequestEventActor")
   requestEventsFrom     PartnerRequestEvent[] @relation("RequestEventFromHandler")
   requestEventsTo       PartnerRequestEvent[] @relation("RequestEventToHandler")
+  tasksAssigned         Task[]                @relation("TaskAssignee")
+  tasksGiven            Task[]                @relation("TaskAssigner")
+  tasksCancelled        Task[]                @relation("TaskCancelledBy")
+  tasksEscalatedTo      Task[]                @relation("TaskEscalatedTo")
+  taskPhotosUploaded    TaskPhoto[]
 
   @@index([roleId])
   @@index([parentId])
@@ -1148,6 +1175,85 @@ model PartnerRequestEvent {
   @@index([requestId, createdAt])
   @@index([actorId])
   @@map("partner_request_events")
+}
+
+// ---------------------------------------------------------------------------
+// Field tasks (Module 12, DEC-175 – DEC-178). A manager gives a task to someone below
+// them; only that person completes it, with 1 – 10 photos. No GPS, no partner link, no
+// task number, no visible timeline (the audit log is enough). Nothing is ever deleted.
+// ---------------------------------------------------------------------------
+
+/// One task given to one person (Zonal Head, Sub-Admin, ASM or Sales Executive).
+model Task {
+  id          String       @id @default(uuid(7)) @db.Uuid
+  /// Required; up to 300 characters (DEC-178).
+  title       String       @db.VarChar(300)
+  /// Optional; up to 5,000 characters (DEC-178).
+  description String?      @db.VarChar(5000)
+  /// Free text; the app offers a suggested list but any value is accepted (DEC-177).
+  category    String       @db.VarChar(100)
+  priority    TaskPriority @default(medium)
+  status      TaskStatus   @default(open)
+
+  /// The one person who must do it; can't be changed or passed on (DEC-175).
+  assignedToId String  @map("assigned_to") @db.Uuid
+  /// Who gave it; they can edit or cancel it until it is completed (DEC-175, DEC-177).
+  assignedById String  @map("assigned_by") @db.Uuid
+  /// The assignee's zone when the task was given; never changes, so old tasks stay
+  /// with the old zone (DEC-178). Empty for Sub-Admins (no zone).
+  zoneId       String? @map("zone_id") @db.Uuid
+
+  /// A day only, India date (DEC-177). Overdue from the next day.
+  dueDate DateTime @map("due_date") @db.Date
+
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// Optional (DEC-177).
+  completionNote String?   @map("completion_note") @db.VarChar(2000)
+
+  cancelledAt   DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById String?   @map("cancelled_by") @db.Uuid
+  /// Required when cancelling (DEC-177).
+  cancelReason  String?   @map("cancel_reason") @db.VarChar(500)
+
+  /// Set once by the daily overdue check (DEC-176): the task stays with the assignee and
+  /// shows up for this manager (the assignee's direct manager at that time).
+  escalatedAt   DateTime? @map("escalated_at") @db.Timestamptz(3)
+  escalatedToId String?   @map("escalated_to") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  assignedTo  User        @relation("TaskAssignee", fields: [assignedToId], references: [id])
+  assignedBy  User        @relation("TaskAssigner", fields: [assignedById], references: [id])
+  zone        Zone?       @relation(fields: [zoneId], references: [id])
+  cancelledBy User?       @relation("TaskCancelledBy", fields: [cancelledById], references: [id])
+  escalatedTo User?       @relation("TaskEscalatedTo", fields: [escalatedToId], references: [id])
+  photos      TaskPhoto[]
+
+  @@index([assignedToId, status])
+  @@index([assignedById, status])
+  @@index([zoneId, status])
+  @@index([escalatedToId, status])
+  @@index([status, dueDate])
+  @@index([createdAt])
+  @@map("tasks")
+}
+
+/// A completion photo: 1 – 10 per completed task (DEC-177). Public R2 URL (DEC-084).
+model TaskPhoto {
+  id           String @id @default(uuid(7)) @db.Uuid
+  taskId       String @map("task_id") @db.Uuid
+  url          String @db.VarChar(1000)
+  uploadedById String @map("uploaded_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  task       Task @relation(fields: [taskId], references: [id])
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@unique([taskId, url])
+  @@map("task_photos")
 }
 
 /// Business values the Admin can change without a code change.

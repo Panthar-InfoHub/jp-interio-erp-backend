@@ -173,8 +173,10 @@ export const CAPABILITIES = {
     description: "Create a task and assign it to someone below",
   },
   "tasks.view": { subAdmin: ["tasks"], description: "See tasks" },
+  // Every Sub-Admin can be given tasks (by the Admin), so every one can complete their own
+  // (DEC-175, DEC-176).
   "tasks.complete": {
-    subAdmin: "never",
+    subAdmin: "every_area",
     description: "Update and complete my own task, with photo proof",
   },
 

@@ -4,7 +4,7 @@ import { ROLE, type RoleId } from "./roles.js";
 /**
  * What files can be uploaded, and for what (Module 5 T3, DEC-074, DEC-084; Module 6 T4, DEC-113).
  * Module 10 T4 adds `payout_proof` (DEC-155); Module 11 T4 `request_receipt` (DEC-170).
- * Later modules add more (task photos, ticket photos).
+ * Module 12 T3 `task_photo` (DEC-181). Later modules add more (ticket photos).
  */
 
 const MB = 1024 * 1024;
@@ -104,6 +104,18 @@ export const UPLOAD_PURPOSES = {
       "image/heif",
     ],
     typesLabel: "a PDF or an image (JPG, PNG, WebP, HEIC)",
+    maxBytes: 5 * MB,
+  },
+  /**
+   * Completion photos of a field task, 1 – 10 per task (Module 12 T3, DEC-177, DEC-181): the
+   * person the task was given to. Images only; camera or gallery both fine (app side).
+   */
+  task_photo: {
+    folder: "tasks",
+    roles: [ROLE.SUB_ADMIN, ROLE.ZONAL_HEAD, ROLE.ASM, ROLE.SALES_EXECUTIVE],
+    capability: "tasks.complete",
+    contentTypes: ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"],
+    typesLabel: "an image (JPG, PNG, WebP, HEIC)",
     maxBytes: 5 * MB,
   },
 } as const satisfies Record<string, UploadRule>;

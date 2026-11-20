@@ -3,13 +3,16 @@ import type { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import type { AuthUser } from "../middlewares/auth.js";
 import { handlerWhere, OPEN_REQUEST_WHERE } from "./request.service.js";
+import { taskCountsFor } from "./task.service.js";
 
 /**
  * ASM "My Team" (Module 4, Task 8; DEC-068).
  * - The ASM's Sales Executives who are active or suspended (switched-off ones are hidden).
  * - Partner counts include suspended partners; deactivated partners are left out.
  * - Open requests (Module 11 T5, DEC-172): per Sales Executive (the ones they handle) and a
- *   team total (the ASM's own plus their Sales Executives'). TODO(Module 12): open tasks.
+ *   team total (the ASM's own plus their Sales Executives').
+ * - Tasks (Module 12 T6, DEC-184): pending and overdue tasks given to each Sales Executive,
+ *   and a team total (the ASM's own plus their Sales Executives').
  */
 
 const NOT_DEACTIVATED = { status: { not: "deactivated" } } satisfies Prisma.UserWhereInput;
@@ -46,11 +49,16 @@ export async function getMyTeam(asm: AuthUser) {
     prisma.partnerRequest.count({ where: { AND: [handlerWhere(asm), OPEN_REQUEST_WHERE] } }),
   ]);
 
+  // Tasks given to me and to each of my Sales Executives (DEC-184).
+  const tasks = await taskCountsFor([asm.id, ...salesExecutives.map((se) => se.id)]);
+  const tasksOf = (id: string) => tasks.get(id) ?? { pending: 0, overdue: 0, givenOpen: 0 };
+
   const partnersOf = (salesExecutiveId: string) =>
     assigned.find((row) => row.salesExecutiveId === salesExecutiveId)?._count._all ?? 0;
   const openRequestsOf = (salesExecutiveId: string) =>
     openByHandler.find((row) => row.handlerId === salesExecutiveId)?._count._all ?? 0;
   const assignedTotal = assigned.reduce((sum, row) => sum + row._count._all, 0);
+  const teamTasks = [...tasks.values()];
 
   return {
     summary: {
@@ -58,10 +66,17 @@ export async function getMyTeam(asm: AuthUser) {
       partners: totalPartners,
       unassignedPartners: totalPartners - assignedTotal,
       openRequests: openTotal,
+      pendingTasks: teamTasks.reduce((sum, counts) => sum + counts.pending, 0),
+      overdueTasks: teamTasks.reduce((sum, counts) => sum + counts.overdue, 0),
     },
     salesExecutives: salesExecutives.map((se) => ({
       ...se,
-      counts: { partners: partnersOf(se.id), openRequests: openRequestsOf(se.id) },
+      counts: {
+        partners: partnersOf(se.id),
+        openRequests: openRequestsOf(se.id),
+        pendingTasks: tasksOf(se.id).pending,
+        overdueTasks: tasksOf(se.id).overdue,
+      },
     })),
   };
 }

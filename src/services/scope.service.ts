@@ -120,6 +120,46 @@ export function scopeForRequests(
 }
 
 /**
+ * Tasks this user may VIEW (Module 12, `tasks.view`; DEC-182).
+ * - full:   all tasks (Admin, Tasks Sub-Admin).
+ * - scoped: tasks whose saved zone is the user's zone (Zonal Head; the zone is fixed when
+ *           the task is given, DEC-178), plus tasks they gave or were given.
+ * - own:    ASM → tasks given to them, to their own Sales Executives, or given by them;
+ *           Sales Executive → only tasks given to them.
+ * Editing / cancelling and doing a task use their own rules in task.service.ts.
+ */
+export function scopeForTasks(user: ScopeUser, scope: PermissionScope): Prisma.TaskWhereInput {
+  const none: Prisma.TaskWhereInput = { id: { in: [] } };
+  switch (scope) {
+    case "full":
+      return {};
+    case "scoped":
+      return {
+        OR: [
+          ...(user.zoneId ? [{ zoneId: user.zoneId }] : []),
+          { assignedToId: user.id },
+          { assignedById: user.id },
+        ],
+      };
+    case "own":
+      switch (user.roleId) {
+        case ROLE.ASM:
+          return {
+            OR: [
+              { assignedToId: user.id },
+              { assignedTo: { parentId: user.id, roleId: ROLE.SALES_EXECUTIVE } },
+              { assignedById: user.id },
+            ],
+          };
+        case ROLE.SALES_EXECUTIVE:
+          return { assignedToId: user.id };
+        default:
+          return none;
+      }
+  }
+}
+
+/**
  * For get-by-ID endpoints. Load the record WITH the scope filter, then pass it here:
  *
  *   const partner = await prisma.user.findFirst({

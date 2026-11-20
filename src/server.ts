@@ -2,6 +2,7 @@ import http from "node:http";
 import app from "./app.js";
 import { env } from "./config/env.js";
 import { startDraftCleanupSchedule } from "./jobs/draftCleanup.job.js";
+import { startTaskEscalationSchedule } from "./jobs/taskEscalation.job.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 
@@ -11,6 +12,7 @@ server.listen(env.PORT, () => {
   logger.info(`Server running on http://localhost:${env.PORT} (${env.NODE_ENV})`);
   // Daily jobs.
   startDraftCleanupSchedule();
+  startTaskEscalationSchedule();
 });
 
 // ---- Graceful shutdown ----

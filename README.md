@@ -100,6 +100,7 @@ The server checks these on start-up and stops with a clear message if something 
 | `npm run db:dev-data` | **Dev only.** Add the pretend test company for manual testing (see section 7) |
 | `npm run db:studio` | Open Prisma Studio to browse the data |
 | `npm run job:clean-drafts` | Run the unfinished-onboarding clean-up now (it also runs daily inside the server, section 11) |
+| `npm run job:escalate-tasks` | Run the overdue-task check now (it also runs inside the server, section 18.3). Safe any time |
 
 **Before saying a task is done**, run `npm run typecheck` and `npm run format:check`. Both must pass.
 
@@ -553,7 +554,8 @@ Admin ─┬─ Sub-Admins (no zone; work by areas)
 - **Every change** is audited and runs in one transaction. Moving or deactivating someone **logs them out** (`revokeAllSessions`).
 - **Moves only change the future.** Old records keep their old manager and zone.
 - **"Reassign first":** an ASM can't be deactivated or moved to another zone while they have Sales Executives or partners; a Zonal Head can't be deactivated while in charge of a zone (DEC-057, DEC-059, DEC-066).
-- **Requests (Module 11):** a Sales Executive handling an unfinished request can't be deactivated or moved; a partner with an open request can't be transferred or have their Sales Executive changed / removed (section 17.1). Tasks don't exist yet: `TODO(Module 12)` comments in `user.service.ts` and `team.service.ts` mark where they join.
+- **Requests (Module 11):** a Sales Executive handling an unfinished request can't be deactivated or moved; a partner with an open request can't be transferred or have their Sales Executive changed / removed (section 17.1).
+- **Tasks (Module 12):** anyone with unfinished tasks given to them or by them can't be switched off or moved, and a Zonal Head can't be replaced (409 `OPEN_TASKS`); the staff profile and My Team show task counts (section 18.4).
 
 ### 10.2 Endpoints
 
@@ -908,7 +910,56 @@ SAMPLE (free): requested ─► accepted ─► processing ─► dispatched ─
 
 ---
 
-## 18. Rules every feature must follow
+## 18. Field tasks (Module 12)
+
+### 18.1 How a task works
+
+A manager gives a task (a dealer visit, a display setup, …) to someone below them. **Only that person** does it and completes it with **1–10 photos** and an optional note. No GPS, no task number, no comments, no repeating tasks, no partner link. Never deleted (`src/services/task.service.ts`, DEC-175 – DEC-184).
+
+```
+open ──► in_progress ──► completed      (Start is optional: open ──► completed)
+  │           │
+  └───────────┴──► cancelled            (giver or above; reason 10–500)
+```
+
+- **Who gives to whom** (`ASSIGNABLE_ROLES` + `scopeForStaff`): Admin → Zonal Heads, Sub-Admins, ASMs, Sales Executives; Tasks Sub-Admin → Zonal Heads, ASMs, Sales Executives (any zone); Zonal Head → ASMs and Sales Executives in their zone; ASM → their own Sales Executives and themselves; Sales Executive → nobody. Out of reach → 404, wrong role → 403, not active → 409.
+- **Giving** (`createTask`): locks the giver's and the doer's `users` rows (id order), checks, saves the doer's **zone** on the task (never changes, DEC-178), audit `task.create`. Due date = a day only, today or later (India time). Category = free text; suggestions in `src/config/taskCategories.ts` (`GET /api/tasks/categories`). Priority default medium. **Not retry-safe** (no `Idempotency-Key`, DEC-180).
+- **Edit / cancel** (`updateTask`, `cancelTask`): the giver **and the people above them** (`editWhere`): Admin all; Tasks Sub-Admin every task not given by the Admin; Zonal Head their own + tasks an ASM gave in their zone; ASM their own. Else 404. Completed or cancelled → 409 (locked). A new due date must be today or later and **clears the overdue flag**. Audit `task.update` (changed fields only) / `task.cancel`.
+- **Start / complete** (`startTask`, `completeTask` → `completeTaskInTx`): only the doer (`assignedToId`), else 404. Photos: upload purpose `task_photo` (images only, 5 MB), each checked in R2 **before** the transaction. Late is fine (the flag stays as history; the audit says `late`). Pressed again → 200 `alreadyDone`.
+- **India time:** "today" and "overdue" use the IST calendar day (`src/utils/istDate.ts`). `isOverdue` = not finished and the due day has passed.
+
+### 18.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `GET /api/tasks/categories` | `tasks.assign` | Suggested categories |
+| `POST /api/tasks` | `tasks.assign` | Give a task |
+| `PATCH /api/tasks/:id` | `tasks.assign` (giver or above) | Edit title, description, category, priority, due date |
+| `POST /api/tasks/:id/cancel` | `tasks.assign` (giver or above) | Cancel with a reason |
+| `GET /api/tasks/mine` | `tasks.complete` | Tasks given to me: `view` = unfinished (default) / today / upcoming / overdue / completed / cancelled, plus counts for every view |
+| `GET /api/tasks` | `tasks.view` (scope) | Team list; filters `status`, `priority`, `category`, `assignedToId`, `assignedById`, `zoneId`, `dueFrom`, `dueTo`, `overdue`, `escalatedToMe`, `search`; sort `createdAt` / `dueDate` / `completedAt` |
+| `GET /api/tasks/:id` | `tasks.view` scope **or** given to me | Full details with photos |
+| `POST /api/tasks/:id/start` | `tasks.complete` (doer) | open → in_progress |
+| `POST /api/tasks/:id/complete` | `tasks.complete` (doer) | Complete with 1–10 photos + optional note |
+
+- View scope (`scopeForTasks` in `scope.service.ts`): Admin and the Tasks Sub-Admin all; Zonal Head tasks whose saved zone is theirs (+ given to / by them); ASM given to them, to their Sales Executives, or by them; Sales Executive their own.
+- **Every Sub-Admin** has `tasks.complete` (own), whatever their areas — an exception to rule G1, so the Admin doesn't get it (`NOT_FOR_ADMIN` in `permissionMatrix.ts`, DEC-179).
+
+### 18.3 The nightly overdue check
+
+- `src/services/taskEscalation.service.ts` (`escalateOverdueTasks` → `findTasksToFlag` + `flagTaskInTx`): every unfinished task past its due day and not flagged yet is flagged **once** to the doer's **direct manager** (their saved `parentId`; a manager who isn't active → the next one up): `escalated_at` + `escalated_to`, audit `task.escalate` with no actor. **The task stays with the doer.** One small transaction per task; each re-checked under its row lock, so runs can overlap safely.
+- `src/jobs/taskEscalation.job.ts`, started in `server.ts`: **5 minutes after start-up**, then **every night at 00:30 India time (19:00 UTC)**. By hand: `npm run job:escalate-tasks`.
+- **Serverless hosting:** in-server timers don't run reliably there. Use the platform's scheduler to run `npm run job:escalate-tasks` at 19:00 UTC instead (open for Module 18). The same applies to `job:clean-drafts`.
+
+### 18.4 People changes and staff screens
+
+- **Blocks** (409 `OPEN_TASKS`, `details.openTasks`; DEC-184): a person with **unfinished tasks given to them or by them** can't be switched off (any role), a Sales Executive or ASM can't be moved, and a Zonal Head can't be replaced (the old one). `assertNoOpenTasks` / `countOpenTasksOf` lock the person's `users` row first — the same row `createTask` locks — so a task can't slip in.
+- **Staff profile** (`GET /api/users/:id`): `tasks: { pending, overdue, givenOpen }`. **My Team** (`GET /api/team`): `pendingTasks` / `overdueTasks` per Sales Executive and in the summary (`taskCountsFor`).
+- API docs: `docs/api/tasks.openapi.yaml` (also `users` 0.9.0, `zones` 0.4.0, `uploads` 0.5.0, `auth` 0.4.3, `settings-permissions` 0.2.3). Manual test plan: `docs/testing/Module 12 complete testing.md`.
+
+---
+
+## 19. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -928,7 +979,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 19. Adding a new feature (checklist)
+## 20. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -942,7 +993,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 20. Not in yet
+## 21. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

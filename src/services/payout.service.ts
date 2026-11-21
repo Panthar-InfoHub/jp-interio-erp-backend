@@ -798,6 +798,7 @@ export async function listPayouts(
         ...(query.status && { status: query.status }),
         ...(query.paidMethod && { paidMethod: query.paidMethod }),
         ...(query.zoneId && { partner: { zoneId: query.zoneId } }),
+        ...(query.partnerId && { partnerId: query.partnerId }),
         ...((query.from || query.to) && {
           createdAt: { ...(query.from && { gte: query.from }), ...(query.to && { lte: query.to }) },
         }),

@@ -177,6 +177,8 @@ export const staffPayoutsSchemas = {
     .extend({
       status: payoutStatus.optional(),
       zoneId: z.uuid("Invalid zone id").optional(),
+      /** One partner's payouts (Partner 360 tab, DEC-258). Still limited to the scope. */
+      partnerId: z.uuid("Invalid partner id").optional(),
       search: z.string().trim().min(1).max(100).optional(),
       from: moment("from").optional(),
       to: moment("to").optional(),

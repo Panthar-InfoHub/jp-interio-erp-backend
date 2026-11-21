@@ -1,5 +1,3 @@
-import QRCode from "qrcode";
-import { ROLES } from "../config/roles.js";
 import { env, isProd } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import type { AuthUser } from "../middlewares/auth.js";
@@ -8,19 +6,7 @@ import {
   startFieldOnboarding,
   verifyFieldOnboarding,
 } from "../services/fieldOnboarding.service.js";
-import {
-  getOnboarding,
-  saveBasicInfo,
-  saveKyc,
-  savePayoutAccount,
-  submitOnboarding,
-} from "../services/onboarding.service.js";
-import { createUploadLink } from "../services/storage.service.js";
-import {
-  basicInfoSchemas,
-  kycSchemas,
-  payoutAccountBody,
-} from "../validators/onboarding.schema.js";
+import { authUserByPhone, fillSignUpSteps, type TestPartner } from "./devPartnerHelpers.js";
 
 /**
  * `npm run dev:kyc-test-partners` — DEV ONLY (frontend F4 T3, DEC-244).
@@ -44,22 +30,9 @@ import {
  * started by someone else) is skipped. Refuses to run when NODE_ENV=production.
  */
 
+const SESSION = "kyc-test-partners";
 const ASM_1 = "919000000121";
 const PUNE_ZONE_NAME = "TEST Pune";
-
-interface TestPartner {
-  key: "X" | "Y" | "Z";
-  /** Leave the sign-up unfinished after the bank / UPI account (a draft holding that number). */
-  stopAfterAccount?: boolean;
-  phone: string;
-  name: string;
-  how: "field" | "self";
-  account:
-    | { method: "bank"; holderName: string; accountNumber: string; ifsc: string; bankName: string }
-    | { method: "upi"; upiId: string; holderName: string };
-  pan: string;
-  aadhaar: string;
-}
 
 // Numbers that don't clash with the backend's Module 5 test guide (P1 – P5).
 const PARTNERS: TestPartner[] = [
@@ -68,6 +41,8 @@ const PARTNERS: TestPartner[] = [
     phone: "919000000210",
     name: "TEST Partner X",
     how: "field",
+    city: "Pune",
+    pincode: "411001",
     account: {
       method: "bank",
       holderName: "TEST Partner X",
@@ -83,6 +58,8 @@ const PARTNERS: TestPartner[] = [
     phone: "919000000211",
     name: "TEST Partner Y",
     how: "self",
+    city: "Pune",
+    pincode: "411001",
     account: { method: "upi", upiId: "testy@okaxis", holderName: "TEST Partner Y" },
     pan: "TESTE5555E",
     aadhaar: "234567890141",
@@ -93,6 +70,8 @@ const PARTNERS: TestPartner[] = [
     name: "TEST Draft Z",
     how: "field",
     stopAfterAccount: true,
+    city: "Pune",
+    pincode: "411001",
     account: {
       method: "bank",
       holderName: "TEST Draft Z",
@@ -106,63 +85,10 @@ const PARTNERS: TestPartner[] = [
   },
 ];
 
-/** The same user object `requireAuth` builds, read from the database. */
-async function authUserByPhone(phone: string): Promise<AuthUser> {
-  const user = await prisma.user.findUnique({
-    where: { phone },
-    select: {
-      id: true,
-      name: true,
-      phone: true,
-      roleId: true,
-      zoneId: true,
-      parentId: true,
-      subAdminAreas: { select: { area: true } },
-    },
-  });
-  const role = user && ROLES.find((r) => r.id === user.roleId);
-  if (!user || !role) throw new Error(`User ${phone} not found. Run npm run db:dev-data.`);
-  return {
-    id: user.id,
-    sessionId: "kyc-test-partners",
-    app: role.app,
-    name: user.name,
-    phone: user.phone,
-    roleId: role.id,
-    roleKey: role.key,
-    tier: role.tier,
-    zoneId: user.zoneId,
-    parentId: user.parentId,
-    subAdminAreas: user.subAdminAreas.map((grant) => grant.area),
-  };
-}
-
-/**
- * Uploads one small PNG as `actor` exactly like an app: signed link → PUT to R2.
- * Returns the public file URL to save in the KYC step.
- */
-async function uploadKycPhoto(actor: AuthUser, label: string): Promise<string> {
-  const image = await QRCode.toBuffer(label, { type: "png", width: 480, margin: 4 });
-  const link = await createUploadLink(actor, {
-    purpose: "kyc",
-    contentType: "image/png",
-    sizeBytes: image.length,
-  });
-  const response = await fetch(link.uploadUrl, {
-    method: "PUT",
-    headers: link.headers,
-    body: new Uint8Array(image),
-  });
-  if (!response.ok) {
-    throw new Error(`R2 refused the upload (${response.status}). Check the R2_* settings.`);
-  }
-  return link.fileUrl;
-}
-
 /** Creates the partner's account and returns who fills in the steps. */
 async function createAccount(partner: TestPartner, otp: string) {
   if (partner.how === "field") {
-    const asm = await authUserByPhone(ASM_1);
+    const asm = await authUserByPhone(ASM_1, SESSION);
     await startFieldOnboarding(asm, partner.phone, undefined);
     const { partnerId } = await verifyFieldOnboarding(asm, partner.phone, otp);
     return { actor: asm, partnerId };
@@ -178,7 +104,7 @@ async function createAccount(partner: TestPartner, otp: string) {
     ip: undefined,
     userAgent: "kyc-test-partners script",
   });
-  const self = await authUserByPhone(partner.phone);
+  const self = await authUserByPhone(partner.phone, SESSION);
   return { actor: self, partnerId: self.id };
 }
 
@@ -201,12 +127,12 @@ async function resumeExisting(
   }
 
   if (partner.how === "field") {
-    const asm = await authUserByPhone(ASM_1);
+    const asm = await authUserByPhone(ASM_1, SESSION);
     if (existing.onboardedById !== asm.id) return skip("started by someone other than ASM 1");
     return { actor: asm, partnerId: existing.id };
   }
   if (existing.onboardedById !== null) return skip("started by field staff, not by the partner");
-  return { actor: await authUserByPhone(partner.phone), partnerId: existing.id };
+  return { actor: await authUserByPhone(partner.phone, SESSION), partnerId: existing.id };
 }
 
 async function makePartner(partner: TestPartner, zoneId: string, otp: string) {
@@ -234,56 +160,13 @@ async function makePartner(partner: TestPartner, zoneId: string, otp: string) {
   }
   const { actor, partnerId } = who;
 
-  // Do whatever is still left, step by step, as the backend reports it (forward only).
-  for (let guard = 0; guard < 6; guard++) {
-    const { nextStep } = await getOnboarding(partnerId);
-    if (nextStep === "done") break;
-    // Z: keep it an unfinished draft that holds its bank account number.
-    if (partner.stopAfterAccount && nextStep === "kyc_documents") {
-      console.log(
-        `DRAFT ${partner.key} (${partner.phone}): id ${partnerId}, left unfinished on purpose`
-      );
-      return;
-    }
-
-    if (nextStep === "basic_info") {
-      await saveBasicInfo(
-        actor,
-        partnerId,
-        basicInfoSchemas.body.parse({
-          name: partner.name,
-          address: "1 Test Road",
-          city: "Pune",
-          state: "Maharashtra",
-          pincode: "411001",
-          zoneId,
-          partnerType: "carpenter",
-        })
-      );
-    } else if (nextStep === "payout_account") {
-      await savePayoutAccount(actor, partnerId, payoutAccountBody.parse(partner.account));
-    } else if (nextStep === "kyc_documents") {
-      const panPhotoUrl = await uploadKycPhoto(actor, `TEST PAN CARD ${partner.pan}`);
-      const aadhaarPhotoUrl = await uploadKycPhoto(actor, `TEST AADHAAR CARD ${partner.aadhaar}`);
-      await saveKyc(
-        actor,
-        partnerId,
-        kycSchemas.body.parse({
-          panNumber: partner.pan,
-          panPhotoUrl,
-          aadhaarNumber: partner.aadhaar,
-          aadhaarPhotoUrl,
-        })
-      );
-    } else if (nextStep === "submit") {
-      await submitOnboarding(actor, partnerId);
-    } else {
-      // e.g. firm_details: this sign-up was started as a dealer / OEM by hand.
-      throw new Error(
-        `${partner.key} stopped at "${nextStep}", which this script doesn't fill in. Finish it in Apidog.`
-      );
-    }
-    console.log(`      ${partner.key}: ${nextStep.replace("_", " ")} saved`);
+  // Do whatever is still left; Z stays an unfinished draft that holds its bank account number.
+  const result = await fillSignUpSteps(actor, partnerId, partner, zoneId);
+  if (result === "draft") {
+    console.log(
+      `DRAFT ${partner.key} (${partner.phone}): id ${partnerId}, left unfinished on purpose`
+    );
+    return;
   }
 
   const profile = await prisma.partnerProfile.findUniqueOrThrow({

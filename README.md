@@ -766,7 +766,7 @@ make batch ──▶ generated ──download ZIP──▶ exported ──(downl
 |---|---|---|
 | `GET /api/partner/wallet` | `wallet.self` + verified partner | My balance card (with rupees) |
 | `GET /api/partner/wallet/statement` | `wallet.self` + verified partner | My passbook; filters `type` (comma list), `direction`, `from`, `to` |
-| `GET /api/partners/:id/wallet` | `ledger.view` (scope) | A partner's balance card, or `wallet: null` + note if not verified |
+| `GET /api/partners/:id/wallet` | `ledger.view` (scope) | A partner's balance card, or `wallet: null` + note if not verified; also `partner` (name, phone, business, zone) for staff without Partner 360 (DEC-256) |
 | `GET /api/partners/:id/ledger` | `ledger.view` (scope) | A partner's passbook (same filters) |
 | `POST /api/partners/:id/points-adjustment` | `ledger.adjust` | `{ direction, points, reason }` (reason 10–500); Admin + Rewards Sub-Admin; audited (DEC-135) |
 | `GET /api/ledger` | `ledger.view` (scope) | Lines across partners + `meta.totals`; extra filters zone, ASM, partner, search, made by |
@@ -849,7 +849,7 @@ requested ──approve──► approved ──mark-paid──► paid ──ma
 | `POST /api/partner/payouts` | `payouts.request` + verified partner | Ask for a payout; 201 new, 200 retry. Needs `Idempotency-Key` |
 | `GET /api/partner/payouts` | `payouts.request` + verified partner | My payouts, newest first; filter `status` |
 | `GET /api/partner/payouts/:id` | `payouts.request` + verified partner | One of my payouts (someone else's → 404) |
-| `GET /api/payouts` | `payouts.view` (scope) | Staff list, newest first, full numbers; filters `status`, `zoneId`, `search`, `from`, `to`, `paidMethod`; no totals |
+| `GET /api/payouts` | `payouts.view` (scope) | Staff list, newest first, full numbers; filters `status`, `zoneId`, `partnerId` (DEC-258), `search`, `from`, `to`, `paidMethod`; no totals |
 | `GET /api/payouts/:id` | `payouts.view` (scope) | One payout + `partnerContext` (wallet, scans last 30 days, last 5 payouts, verified date) |
 | `POST /api/payouts/:id/approve` | `payouts.approve` (scope) | requested → approved |
 | `POST /api/payouts/:id/decline` | `payouts.approve` (scope) | requested / approved → declined; points back |

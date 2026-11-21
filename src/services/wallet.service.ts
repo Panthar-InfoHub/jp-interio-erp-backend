@@ -204,10 +204,37 @@ export async function assertPartnerInScope(
   );
 }
 
-/** GET /api/partners/:id/wallet — `ledger.view` within scope (DEC-134). */
+/**
+ * GET /api/partners/:id/wallet — `ledger.view` within scope (DEC-134). Also says who the
+ * partner is (name, phone, business, current zone), so staff without Partner 360 (the
+ * Rewards Sub-Admin) can show a heading (DEC-256).
+ */
 export async function getPartnerWallet(me: AuthUser, scope: PermissionScope, partnerId: string) {
   await assertPartnerInScope(me, scope, partnerId);
-  return { partnerId, ...(await walletForStaff(partnerId)) };
+  const [who, wallet] = await Promise.all([
+    prisma.user.findUniqueOrThrow({
+      where: { id: partnerId },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        partnerProfile: { select: { businessName: true } },
+        zone: { select: { id: true, name: true, code: true } },
+      },
+    }),
+    walletForStaff(partnerId),
+  ]);
+  return {
+    partnerId,
+    partner: {
+      id: who.id,
+      name: who.name,
+      phone: who.phone,
+      businessName: who.partnerProfile?.businessName ?? null,
+      zone: who.zone,
+    },
+    ...wallet,
+  };
 }
 
 /**

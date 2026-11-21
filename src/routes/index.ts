@@ -4,6 +4,7 @@ import authRoutes from "./auth.routes.js";
 import brandRoutes from "./brand.routes.js";
 import catalogRoutes from "./catalog.routes.js";
 import categoryRoutes from "./category.routes.js";
+import dashboardRoutes from "./dashboard.routes.js";
 import devRoutes from "./dev.routes.js";
 import fieldOnboardingRoutes from "./fieldOnboarding.routes.js";
 import kycRoutes from "./kyc.routes.js";
@@ -53,6 +54,7 @@ router.use("/payouts", payoutRoutes);
 router.use("/requests", requestRoutes);
 router.use("/tasks", taskRoutes);
 router.use("/tickets", ticketRoutes);
+router.use("/dashboard", dashboardRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

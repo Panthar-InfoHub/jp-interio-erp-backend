@@ -1,9 +1,10 @@
 import type { Prisma } from "../generated/prisma/client.js";
-import { prisma } from "../lib/prisma.js";
+import { reportsDb } from "../lib/prisma.js";
 import { pointsToRupees } from "../utils/money.js";
 
 /**
- * Points liability report (Module 8 T7; DEC-045, DEC-136). Admin only.
+ * Points liability report (Module 8 T7; DEC-045, DEC-136). Admin and the Rewards Sub-Admin
+ * (DEC-205). Reads through the report connection (DEC-210).
  * - Owed = available + held, for every partner, as of a moment (default: now). For each
  *   partner it uses the balances of their LAST ledger line at or before that moment, so
  *   the total is exact for any past date.
@@ -37,7 +38,7 @@ function amounts(available: number, held: number, frozen: number) {
 /** `db`: the shared client, or a caller's transaction (e.g. a check that rolls back). */
 export async function getPointsLiability(
   asOf: Date = new Date(),
-  db: Prisma.TransactionClient = prisma
+  db: Prisma.TransactionClient = reportsDb
 ) {
   // Frozen = not active or not verified: the same rule as isWalletFrozen (DEC-129).
   const rows = await db.$queryRaw<ZoneRow[]>`

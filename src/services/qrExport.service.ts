@@ -4,6 +4,7 @@ import { ZipArchive } from "archiver";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import type { AuthUser } from "../middlewares/auth.js";
+import { csvCell } from "../utils/csv.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { qrLink } from "../utils/qrCode.js";
 import { qrPng, qrSvg } from "../utils/qrImage.js";
@@ -82,11 +83,6 @@ export async function startExport(actor: AuthUser, batchId: string): Promise<Exp
  * One CSV cell. Quoted when needed; a value starting with = + - @ gets a leading ' so
  * Excel never runs it as a formula.
  */
-function csvCell(value: string): string {
-  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
-}
-
 function buildCsv(info: ExportInfo, codes: string[]): string {
   const header = ["batch_no", "code", "link", "product_sku", "product_name"];
   const lines = [header.join(",")];

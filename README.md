@@ -60,6 +60,7 @@ Check that it works: open **http://localhost:8080/health**. You should see `"sta
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`… Default: `debug` in development, `info` in production |
 | `DATABASE_URL` | **Yes** | Neon **pooled** connection (the host contains `-pooler`). Used by the app while running |
 | `DIRECT_URL` | **Yes** | Neon **direct** connection (no `-pooler`). Used by Prisma for migrations |
+| `REPORTS_DATABASE_URL` | No | Dashboards and reports read through this connection (e.g. a Neon **read-only copy**). Empty = `DATABASE_URL` (DEC-210, section 20) |
 | `CORS_ORIGINS` | No | Comma-separated list of web addresses allowed to call the API. Default `http://localhost:3000` |
 | `AUTH_SECRET` | **Yes** | One long random secret (32+ characters). It signs login tokens and scrambles OTPs and refresh tokens. **Changing it logs everyone out.** The command to generate one is in `.env.example` |
 | `SMS_PROVIDER` | No | `dummy` (default: prints the OTP in the terminal) or `msg91` (real SMS). `dummy` is refused in production |
@@ -994,7 +995,45 @@ open ──► in_progress ──► resolved      (open ──► resolved dire
 
 ---
 
-## 20. Rules every feature must follow
+## 20. Dashboards & reports (Module 16)
+
+### 20.1 How it works
+
+Read-only: dashboards and CSV reports **never change business data**; the only write is one audit row per CSV download (DEC-195 – DEC-225).
+
+- **Report connection** (`reportsDb` in `src/lib/prisma.ts`, DEC-210): every dashboard and report query reads through it. It is the main database until `REPORTS_DATABASE_URL` is set (e.g. to a Neon read-only copy) — no code change needed. Writes (the audit row) always go through `prisma`.
+- **Counted live** on every call (DEC-211). No summary tables. If a number becomes slow later, switch only that one to background counting.
+- **Periods** (`src/utils/period.ts`, DEC-202, DEC-209): `today`, `month` (default) and `all`, India dates. `dormantCutoff(days)`: a partner whose last scan is before this moment is **dormant** (setting `partners.dormant_days`, default 30, DEC-201).
+- **Meaning of every number:** DEC-221 – DEC-223 (and the Reports & Dashboards API file). Short version:
+  - "Signed up" partner = KYC pending, verified or rejected, not a retired draft. Active / dormant are counted among verified, not suspended partners.
+  - **Where it happened** (DEC-222): scans, points, requests, payouts and tasks count in the zone / owning ASM **saved on the record**. Partner counts and the Zonal Head's payout cards use the partner's **current** zone.
+  - A Sales Executive's scan numbers use the partners **assigned to them now** (scans don't save the SE, DEC-223).
+- **Who sees what** (DEC-200): `dashboard.view` — Admin (full), every Sub-Admin (`every_area`, they see their areas' cards), Zonal Head (scoped), ASM and Sales Executive (own). `reports.view` — Admin, Sub-Admin (all 6 areas; **which** report is checked per report from their areas, `REPORT_AREAS` in `reportExport.service.ts`, DEC-214) and Zonal Head. ASMs / SEs: dashboard only. `reports.points_liability` now includes the **Rewards Sub-Admin** (DEC-205).
+- **Dashboard** (`src/services/dashboard.service.ts`): one address for every role (DEC-220); `getDashboard` picks the role's cards. The card builders (`partnerCards`, `scanCards`, `payoutCards`, `requestCards`, `taskCards`, …) take a scope filter, so each role reuses them. Leaderboards: top 5 partners (points) and top 5 **active** ASMs (`rankAsmsBy` = points / scans / newPartners); ties → reached first, then name (DEC-217, DEC-222). No fraud card until Module 17 (DEC-198).
+- **CSV reports** (`src/services/reportExport.service.ts`, DEC-224): `startReportDownload` checks the Sub-Admin area and the zone (a Zonal Head always gets their own zone; another zone → 403), works out the rows and the row count, writes **one `report.export` audit row** (who, report, filters, row count; DEC-218), then the controller streams the file with `writeCsv` (`src/utils/csv.ts`: BOM, India times, `'` in front of `=` `+` `-` `@`, CRLF). Big tables are read 1,000 rows at a time (no size limit, DEC-208). PAN / GST / bank / UPI in full, **Aadhaar last 4** (DEC-207). The QR batch export uses the same `csvCell`.
+
+### 20.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `GET /api/dashboard?period=today\|month\|all&rankAsmsBy=points\|scans\|newPartners` | `dashboard.view` (web and app) | My dashboard; `role` in the reply says which cards |
+| `GET /api/reports/scans.csv` | `reports.view`, web; Sub-Admin: Rewards or QR | One row per scan. Filters: `from`, `to`, `zoneId`, `productId`, `partnerId` |
+| `GET /api/reports/points-issued.csv` | `reports.view`, web; Sub-Admin: Rewards | One row per partner (totals) |
+| `GET /api/reports/payouts.csv` | `reports.view`, web; Sub-Admin: Rewards | One row per payout; `status` |
+| `GET /api/reports/partners.csv` | `reports.view`, web; Sub-Admin: Partners | One row per partner; `kycState`, `activity`, `partnerType`; dates = joined between (no default) |
+| `GET /api/reports/products.csv` | `reports.view`, web; Sub-Admin: Products | One row per product |
+| `GET /api/reports/regions.csv` | `reports.view`, web; Sub-Admin: Partners | One row per zone |
+| `GET /api/reports/tasks.csv` | `reports.view`, web; Sub-Admin: Tasks | One row per task; `status` |
+| `GET /api/reports/requests.csv` | `reports.view`, web; Sub-Admin: Requests | One row per request; `stage`, `type` |
+| `GET /api/reports/points-liability` | `reports.points_liability` (Admin, Rewards Sub-Admin) | JSON, unchanged from Module 8 |
+
+- Dates `from` / `to` (`YYYY-MM-DD`, India, both included) are optional: none = this month. The file name carries them (`payouts_2026-11-01_to_2026-11-21.csv`); `X-Row-Count` gives the rows.
+- Permissions: 125 → **132** rows (`dashboard.view` × 5 roles; Sub-Admin `reports.view` and `reports.points_liability`). Settings: + `partners.dormant_days`. No migration.
+- API docs: `docs/api/reports.openapi.yaml` (also `ledger` 0.2.0, `auth` 0.4.4, `settings-permissions` 0.2.4). Manual test plan: `docs/testing/Module 16 complete testing.md`.
+
+---
+
+## 21. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -1014,7 +1053,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 21. Adding a new feature (checklist)
+## 22. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -1028,7 +1067,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 22. Not in yet
+## 23. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

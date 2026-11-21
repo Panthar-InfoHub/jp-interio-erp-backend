@@ -62,6 +62,7 @@ const ADMIN: RoleMatrix = {
   "tasks.view": "full",
   "notifications.manage": "full",
   "tickets.handle": "full",
+  "dashboard.view": "full",
   "reports.view": "full",
   "fraud.review": "full",
 };
@@ -106,6 +107,7 @@ const ZONAL_HEAD: RoleMatrix = {
   "tasks.assign": "scoped",
   "tasks.view": "scoped",
   "tasks.complete": "own",
+  "dashboard.view": "scoped",
   "reports.view": "scoped",
 };
 
@@ -130,6 +132,8 @@ const ASM: RoleMatrix = {
   "tasks.assign": "own",
   "tasks.view": "own",
   "tasks.complete": "own",
+  // Dashboard only, no reports (DEC-200).
+  "dashboard.view": "own",
 };
 
 /** Sales Executive: only records assigned to them or created by them. */
@@ -146,6 +150,8 @@ const SALES_EXECUTIVE: RoleMatrix = {
   "requests.handle": "own",
   "tasks.view": "own",
   "tasks.complete": "own",
+  // Dashboard only, no reports (DEC-200).
+  "dashboard.view": "own",
 };
 
 /** Partner: only themselves. */

@@ -134,7 +134,11 @@ export const CAPABILITIES = {
     subAdmin: ["rewards"],
     description: "Manual points credit or debit (reason required)",
   },
-  "reports.points_liability": { subAdmin: "never", description: "Points liability report" },
+  // Admin and the Rewards Sub-Admin (DEC-205).
+  "reports.points_liability": {
+    subAdmin: ["rewards"],
+    description: "Points liability report",
+  },
   "payouts.request": { subAdmin: "never", description: "Cash out points" },
   "payouts.view": { subAdmin: ["rewards"], description: "Payout list and one payout" },
   "payouts.approve": {
@@ -190,7 +194,18 @@ export const CAPABILITIES = {
     subAdmin: "never",
     description: "Ticket queue; assign, update and resolve tickets",
   },
-  "reports.view": { subAdmin: "never", description: "Reports and CSV exports" },
+  // Every staff role; each sees only their part (DEC-195, DEC-200). A Sub-Admin sees the
+  // cards of the areas they hold.
+  "dashboard.view": {
+    subAdmin: "every_area",
+    description: "My dashboard (numbers for my part of the business)",
+  },
+  // CSV reports (DEC-199, DEC-200, DEC-219). Every area unlocks some reports; WHICH reports
+  // a Sub-Admin may download is checked per report from their areas (DEC-214).
+  "reports.view": {
+    subAdmin: ["partners", "rewards", "products", "qr", "tasks", "requests"],
+    description: "Download reports as CSV",
+  },
   "fraud.review": {
     subAdmin: "never",
     description: "Fraud flag queue; dismiss or act on a flag",

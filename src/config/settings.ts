@@ -81,6 +81,14 @@ export const SETTINGS = {
     min: 1,
     max: 365,
   },
+  // A partner with no successful scan in this many days is "dormant" (DEC-201).
+  "partners.dormant_days": {
+    type: "int",
+    default: 30,
+    description: "Days without a scan after which a partner counts as dormant.",
+    min: 1,
+    max: 365,
+  },
   // Safety caps against typing mistakes when making a QR batch (DEC-119).
   "qr.max_batch_size": {
     type: "int",

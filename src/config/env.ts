@@ -9,6 +9,13 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   DIRECT_URL: z.string().min(1, "DIRECT_URL is required"),
+  // Dashboards and reports read through this connection (DEC-210). Empty = the main
+  // database (DATABASE_URL). Set it to a Neon read-only copy later; no code change needed.
+  REPORTS_DATABASE_URL: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value || undefined),
 
   CORS_ORIGINS: z
     .string()

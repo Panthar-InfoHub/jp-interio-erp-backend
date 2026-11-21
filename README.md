@@ -959,7 +959,42 @@ open ──► in_progress ──► completed      (Start is optional: open ─
 
 ---
 
-## 19. Rules every feature must follow
+## 19. Support tickets (Module 15)
+
+### 19.1 How a ticket works
+
+A **partner** reports a problem from the Partner App; **only the Admin** handles it from the web console. Every change goes through `src/services/ticket.service.ts` (DEC-187 – DEC-194). No conversation, no "assign to", no time limit (SLA), no links to payouts / scans / QR / requests. Never deleted.
+
+```
+open ──► in_progress ──► resolved      (open ──► resolved directly is fine)
+  │           │
+  └───────────┴──► rejected            (resolved / rejected: note 10–2,000, final)
+```
+
+- **Who raises** (`tickets.create`, Partner only): **any state except suspended** — sign-up not finished, KYC pending, KYC rejected, verified. Suspended partners can't log in (`requireAuth`), so the routes use **no** `requireVerifiedPartner` (DEC-189). The partner only raises: no edit, cancel, close or reopen.
+- **Raising** (`createTicket`): category (6 codes, labels in `src/config/ticketCategories.ts`), description 10–2,000, **0–5 photos** (upload purpose `ticket_photo`, images only, 5 MB, each checked in R2 **before** the transaction, no repeats). Photos are a **list of links in one column** `photo_urls` (no photos table, DEC-191). Number `TKT-<year>-<0001>` under a Postgres advisory lock (`support:ticket_no`), audit `ticket.create`. **Not retry-safe** (no `Idempotency-Key`, DEC-190): the Admin rejects a duplicate.
+- **Handling** (`changeTicketStatus` → `changeTicketStatusInTx`, `tickets.handle`, Admin only, web only): locks the ticket row `FOR UPDATE`; allowed moves in `moveAllowed`; `in_progress` takes **no** note, `resolved` / `rejected` need one (10–2,000) and set `closed_at`. Same status again → 200 `alreadyDone` (first note kept, no audit row). A final ticket → 409. No going back to `open`. Saves `updated_by` + `status_changed_at`. Audit `ticket.start` / `ticket.resolve` / `ticket.reject` (before / after).
+- **The partner never sees which Admin** handled the ticket (only status, note and dates).
+
+### 19.2 Endpoints
+
+| Method & path | Permission | What it does |
+|---|---|---|
+| `GET /api/partner/tickets/categories` | Partner, `tickets.create` | The 6 categories with display names |
+| `POST /api/partner/tickets` | Partner, `tickets.create` | Raise a ticket (0–5 photos) |
+| `GET /api/partner/tickets` | Partner, `tickets.create` | My tickets, newest first, optional `status` |
+| `GET /api/partner/tickets/:id` | Partner, `tickets.create` | One own ticket; someone else's → 404 |
+| `GET /api/tickets` | Admin, `tickets.handle`, web | Queue: `status` = unfinished (default) / all / one status; `category`; `search` (ticket number, partner name, phone); counts per status (over all tickets) |
+| `GET /api/tickets/:id` | Admin, `tickets.handle`, web | Full ticket with photos, the partner (phone, type, zone, KYC state), who last changed it |
+| `POST /api/tickets/:id/status` | Admin, `tickets.handle`, web | `in_progress` / `resolved` / `rejected` (+ `note` for the last two) |
+
+- **Partner 360** (`GET /api/partners/:id`): a `tickets` box `{ open, in_progress, resolved, rejected, total }`, only for staff with `tickets.handle` (the Admin) — `ticketsBoxFor360`.
+- Permissions were already seeded (Partner `tickets.create` own, Admin `tickets.handle` full): no change, still 125 rows.
+- API docs: `docs/api/tickets.openapi.yaml` (also `uploads` 0.6.0, `partners` 0.9.0). Manual test plan: `docs/testing/Module 15 complete testing.md`.
+
+---
+
+## 20. Rules every feature must follow
 
 These are short versions; the full list is R1–R14 in the build plan.
 
@@ -979,7 +1014,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 20. Adding a new feature (checklist)
+## 21. Adding a new feature (checklist)
 
 1. Add or change models in `prisma/schema.prisma`, then run `npm run db:migrate`.
 2. New actions: add them to `src/config/capabilities.ts` and `src/config/permissionMatrix.ts`, then run `npm run db:seed`. New record types: add a `scopeFor…` function to `src/services/scope.service.ts`.
@@ -993,7 +1028,7 @@ These are short versions; the full list is R1–R14 in the build plan.
 
 ---
 
-## 21. Not in yet
+## 22. Not in yet
 
 - **ESLint:** waiting for typescript-eslint to support TypeScript 7 (DEC-023).
 - **Automated tests:** written at the end of the project (DEC-014).

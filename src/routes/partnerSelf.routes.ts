@@ -5,6 +5,7 @@ import * as payoutController from "../controllers/payout.controller.js";
 import * as payoutAccountController from "../controllers/payoutAccount.controller.js";
 import * as requestController from "../controllers/request.controller.js";
 import * as scanController from "../controllers/scan.controller.js";
+import * as ticketController from "../controllers/ticket.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
 import { requireAuth, requireRole } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
@@ -22,6 +23,11 @@ import {
   requestIdSchemas,
 } from "../validators/request.schema.js";
 import { myScansSchemas, scanSchemas } from "../validators/scan.schema.js";
+import {
+  createTicketSchemas,
+  myTicketsSchemas,
+  ticketIdSchemas,
+} from "../validators/ticket.schema.js";
 import { myStatementSchemas } from "../validators/wallet.schema.js";
 import {
   addMyAccountSchemas,
@@ -155,5 +161,18 @@ router.post(
   validate(cancelRequestSchemas),
   requestController.cancelMine
 );
+
+// Support tickets (Module 15 T2, DEC-187 – DEC-192). Any partner except suspended (they can't
+// log in), so no verified-partner check (DEC-189). `/categories` comes before `/:id`.
+const ticketGuards = [requireAuth, requireRole(ROLE.PARTNER), requirePermission("tickets.create")];
+router.get("/tickets/categories", ...ticketGuards, ticketController.categories);
+router.post(
+  "/tickets",
+  ...ticketGuards,
+  validate(createTicketSchemas),
+  ticketController.createMine
+);
+router.get("/tickets", ...ticketGuards, validate(myTicketsSchemas), ticketController.listMine);
+router.get("/tickets/:id", ...ticketGuards, validate(ticketIdSchemas), ticketController.getMine);
 
 export default router;

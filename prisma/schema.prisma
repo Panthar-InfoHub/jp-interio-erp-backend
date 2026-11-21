@@ -332,6 +332,35 @@ enum TaskPriority {
   @@map("task_priority")
 }
 
+/// Where a support ticket is (Module 15, DEC-188). Only the Admin moves it.
+/// open → in_progress → resolved; open → resolved; open / in_progress → rejected.
+/// resolved and rejected are end stages (note required); nothing changes after them.
+enum TicketStatus {
+  open
+  in_progress
+  resolved
+  rejected
+
+  @@map("ticket_status")
+}
+
+/// What the ticket is about; the partner picks one (DEC-188).
+enum TicketCategory {
+  /// Damaged or unreadable QR sticker.
+  damaged_qr
+  /// Points not received after a scan.
+  points_not_received
+  /// Payout delayed or not received.
+  payout_issue
+  /// Account or KYC problem.
+  account_kyc
+  /// Shipment or sample request problem.
+  request_issue
+  other
+
+  @@map("ticket_category")
+}
+
 // ---- Models ----
 
 /// The 6 fixed roles. Seeded, never created from the API.
@@ -458,6 +487,8 @@ model User {
   tasksCancelled        Task[]                @relation("TaskCancelledBy")
   tasksEscalatedTo      Task[]                @relation("TaskEscalatedTo")
   taskPhotosUploaded    TaskPhoto[]
+  ticketsRaised         SupportTicket[]       @relation("TicketPartner")
+  ticketsUpdated        SupportTicket[]       @relation("TicketUpdatedBy")
 
   @@index([roleId])
   @@index([parentId])
@@ -1254,6 +1285,53 @@ model TaskPhoto {
 
   @@unique([taskId, url])
   @@map("task_photos")
+}
+
+// ---------------------------------------------------------------------------
+// Support tickets (Module 15, DEC-187 – DEC-191). A partner (any state except suspended)
+// raises a ticket; only the Admin handles it. No conversation, no "assign to", no SLA,
+// no links to payouts / scans / QR / requests. Nothing is ever deleted.
+// ---------------------------------------------------------------------------
+
+/// One problem reported by one partner.
+model SupportTicket {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  /// Shown to people: `TKT-<year>-<4 digits>`, e.g. TKT-2026-0001 (DEC-189).
+  ticketNo    String         @unique @map("ticket_no") @db.VarChar(20)
+  /// UTC year and running number inside that year; the counter restarts at 1 each year.
+  year        Int            @db.SmallInt
+  seq         Int
+  /// The partner who raised it.
+  partnerId   String         @map("partner_id") @db.Uuid
+  category    TicketCategory
+  /// 10 – 2,000 characters (DEC-188).
+  description String         @db.VarChar(2000)
+  /// 0 – 5 public R2 links, upload purpose `ticket_photo` (DEC-188, DEC-191). Set once when
+  /// raised; never changed.
+  photoUrls   String[]       @map("photo_urls") @db.VarChar(1000)
+  status      TicketStatus   @default(open)
+
+  /// Resolution note (resolved) or reason (rejected); required for both (DEC-188).
+  resolutionNote String?   @map("resolution_note") @db.VarChar(2000)
+  /// When it reached resolved or rejected.
+  closedAt       DateTime? @map("closed_at") @db.Timestamptz(3)
+
+  /// The Admin who last changed the status, and when (no "assign to", DEC-189).
+  updatedById     String?   @map("updated_by") @db.Uuid
+  statusChangedAt DateTime? @map("status_changed_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  partner   User  @relation("TicketPartner", fields: [partnerId], references: [id])
+  updatedBy User? @relation("TicketUpdatedBy", fields: [updatedById], references: [id])
+
+  @@unique([year, seq])
+  @@index([partnerId, createdAt])
+  @@index([status, createdAt])
+  @@index([category, status])
+  @@index([createdAt])
+  @@map("support_tickets")
 }
 
 /// Business values the Admin can change without a code change.

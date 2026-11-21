@@ -21,6 +21,7 @@ import settingsRoutes from "./settings.routes.js";
 import subAdminRoutes from "./subAdmin.routes.js";
 import taskRoutes from "./task.routes.js";
 import teamRoutes from "./team.routes.js";
+import ticketRoutes from "./ticket.routes.js";
 import uploadRoutes from "./upload.routes.js";
 import userRoutes from "./user.routes.js";
 import zoneRoutes from "./zone.routes.js";
@@ -51,6 +52,7 @@ router.use("/reports", reportRoutes);
 router.use("/payouts", payoutRoutes);
 router.use("/requests", requestRoutes);
 router.use("/tasks", taskRoutes);
+router.use("/tickets", ticketRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

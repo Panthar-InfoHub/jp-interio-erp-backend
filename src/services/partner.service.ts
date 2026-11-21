@@ -15,6 +15,7 @@ import {
   OpenRequestsError,
   requestsBoxFor360,
 } from "./request.service.js";
+import { ticketsBoxFor360 } from "./ticket.service.js";
 import { pointsBoxFor360 } from "./wallet.service.js";
 
 /**
@@ -117,7 +118,8 @@ export async function listPartners(me: AuthUser, scope: PermissionScope, query: 
  * GET /partners/:id — Partner 360: ANY state (unfinished, pending, verified, rejected),
  * within `partners.view` scope (DEC-105). Retired drafts → 404 (DEC-093).
  * Module 8 adds `points` (the wallet box), only for staff with `ledger.view` (DEC-134).
- * Later modules add scans, payouts and requests to this reply.
+ * Later modules add scans, payouts and requests to this reply. Module 15 adds `tickets`
+ * (counts per status), Admin only (DEC-190).
  */
 export async function getPartner360(me: AuthUser, scope: PermissionScope, id: string) {
   assertInScope(
@@ -133,17 +135,19 @@ export async function getPartner360(me: AuthUser, scope: PermissionScope, id: st
     }),
     { user: me, entity: "partner", id }
   );
-  const [detail, points, payouts, requests] = await Promise.all([
+  const [detail, points, payouts, requests, tickets] = await Promise.all([
     buildPartnerDetail(id),
     pointsBoxFor360(me, id),
     payoutsBoxFor360(me, id),
     requestsBoxFor360(me, id),
+    ticketsBoxFor360(me, id),
   ]);
   return {
     ...detail,
     ...(points && { points }),
     ...(payouts && { payouts }),
     ...(requests && { requests }),
+    ...(tickets && { tickets }),
   };
 }
 

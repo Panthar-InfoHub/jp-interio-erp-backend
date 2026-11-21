@@ -24,7 +24,8 @@
     "job:clean-drafts": "tsx src/jobs/cleanDrafts.ts",
     "job:reconcile-ledger": "tsx src/jobs/reconcileLedger.ts",
     "job:escalate-tasks": "tsx src/jobs/escalateTasks.ts",
-    "check:parallel-scan": "tsx src/jobs/parallelScanCheck.ts"
+    "check:parallel-scan": "tsx src/jobs/parallelScanCheck.ts",
+    "dev:kyc-test-partners": "tsx src/jobs/makeKycTestPartners.ts"
   },
   "keywords": [],
   "author": "",

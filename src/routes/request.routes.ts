@@ -1,9 +1,10 @@
 import { Router } from "express";
 import * as requestController from "../controllers/request.controller.js";
-import { requireAuth } from "../middlewares/auth.js";
+import { requireApp, requireAuth } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
 import {
+  allRequestsSchemas,
   assignRequestSchemas,
   takeBackRequestSchemas,
   acceptRequestSchemas,
@@ -27,14 +28,28 @@ const router = Router();
 
 const handle = [requireAuth, requirePermission("requests.handle")];
 
+// F9 T1 (DEC-279, DEC-280) — every request I may see, for the web panel only (Admin,
+// Requests Sub-Admin, Zonal Head); ASM / Sales Executive use the worklist. All states by
+// default, newest first.
+router.get(
+  "/",
+  requireAuth,
+  requireApp("web"),
+  requirePermission("requests.view"),
+  validate(allRequestsSchemas),
+  requestController.listAll
+);
 // T6 (DEC-173) — the worklist: requests I handle (ASM: also my Sales Executives'), open by
 // default, newest first. Before "/:id" so "worklist" isn't read as an id.
 router.get("/worklist", ...handle, validate(worklistSchemas), requestController.worklist);
 // Full details for any staff viewer within scope (`requests.view`): Admin / Requests
 // Sub-Admin all, Zonal Head zone, ASM team + own partners, Sales Executive handled by them.
+// Staff apps only: a partner holds `requests.view` (own) too, but sees their requests
+// through /partner/requests, without staff names (DEC-169, DEC-280).
 router.get(
   "/:id",
   requireAuth,
+  requireApp("web", "field"),
   requirePermission("requests.view"),
   validate(requestIdSchemas),
   requestController.detail

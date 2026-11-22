@@ -153,6 +153,31 @@ export const worklistSchemas = {
 };
 export type WorklistQuery = z.output<typeof worklistSchemas.query>;
 
+/**
+ * GET /api/requests — every request I may see (web panel: Admin, Requests Sub-Admin, Zonal
+ * Head; F9 T1, DEC-279, DEC-280). All states by default, newest first.
+ * - `zoneId`: the partner's current zone.
+ * - `handlerId`: one ASM or Sales Executive handling it now.
+ * - `asmId`: handled by that ASM or by any of their Sales Executives.
+ * Filters sit on top of the view scope, so one outside it just gives an empty list.
+ */
+export const allRequestsSchemas = {
+  query: listQuery({ sortFields: ["createdAt", "updatedAt"], defaultSort: "-createdAt" })
+    .extend({
+      state: requestState.default("all"),
+      status: requestStatus.optional(),
+      category: requestCategory.optional(),
+      zoneId: z.uuid("Invalid zone id").optional(),
+      handlerId: z.uuid("Invalid handler id").optional(),
+      asmId: z.uuid("Invalid ASM id").optional(),
+      search: z.string().trim().min(1).max(100).optional(),
+      from: moment("from").optional(),
+      to: moment("to").optional(),
+    })
+    .refine(datesInOrder, datesMessage),
+};
+export type AllRequestsQuery = z.output<typeof allRequestsSchemas.query>;
+
 /** GET /api/partners/:id/requests — one partner's request history (Partner 360), all by default. */
 export const partnerRequestsSchemas = {
   params: idParams,

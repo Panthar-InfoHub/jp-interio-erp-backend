@@ -889,7 +889,7 @@ SAMPLE (free): requested ─► accepted ─► processing ─► dispatched ─
 - **Blocks while requests are open** (409 `OPEN_REQUESTS`, `details.openRequests`; DEC-165, DEC-172): partner transfer; changing or removing the partner's Sales Executive (a **first** one is allowed) — `countOpenRequestsOfPartner`; Sales Executive deactivate or move to another ASM — `countOpenRequestsHandledBy`, counted **after** their partner links are cleared so a request being saved is seen. Every one of these locks the rows in the same order as creating a request (no deadlocks).
 - **India time:** "today" for dates is the IST calendar day (`src/utils/istDate.ts`, DEC-169).
 - **What the partner sees:** stages with dates only (no staff names, no hand-overs, no payment details), the agreed price, the reject / cancel reason, and the **current** handler's name and phone.
-- Not built (DEC-158, DEC-164, DEC-170): notifications, receipt / invoice, payment corrections, dispatch details (vehicle, LR), proof of delivery, Zonal Head / Sub-Admin / Admin actions (view only for now), a standalone all-requests list.
+- Not built (DEC-158, DEC-164, DEC-170): notifications, receipt / invoice, payment corrections, dispatch details (vehicle, LR), proof of delivery, Zonal Head / Sub-Admin / Admin actions (view only for now). (A list of all requests for the web panel was added later, F9 T1, DEC-279.)
 
 ### 17.2 Endpoints
 
@@ -899,15 +899,17 @@ SAMPLE (free): requested ─► accepted ─► processing ─► dispatched ─
 | `GET /api/partner/requests` | `requests.view` + verified partner | My requests, newest first; filters `status`, `category` |
 | `GET /api/partner/requests/:id` | `requests.view` + verified partner | One of my requests (someone else's → 404) |
 | `POST /api/partner/requests/:id/cancel` | `requests.create` + verified partner | Cancel before dispatched, with a reason |
+| `GET /api/requests` | `requests.view` (scope) + **web app** | All requests I may see (Admin, Requests Sub-Admin, Zonal Head; added for the panel, F9 T1, DEC-279, DEC-280); **all states** by default (`state`); filters `status`, `category`, `zoneId`, `handlerId`, `asmId` (that ASM or their Sales Executives), `search`, `from`, `to`; sort `createdAt` / `updatedAt`; rows also have the partner's current `zone`. A filter outside the scope gives an empty list |
 | `GET /api/requests/worklist` | `requests.handle` | Requests I handle (ASM: + my Sales Executives'); open by default (`state`); filters `status`, `category`, `handlerId`, `search`, `from`, `to` |
-| `GET /api/requests/:id` | `requests.view` (scope) | Full details: payment / refund with receipts, reasons, timeline with names and hand-overs |
+| `GET /api/requests/:id` | `requests.view` (scope) + staff app (a partner → 403, DEC-280) | Full details: payment / refund with receipts, reasons, timeline with names and hand-overs |
 | `POST /api/requests/:id/accept` · `reject` · `payment-received` · `processing` · `dispatched` · `delivered` · `completed` · `cancel` · `refund-initiated` · `refunded` | `requests.handle` (handler side) | One stage step each |
 | `POST /api/requests/:id/assign` · `take-back` | `requests.delegate` (ASM) | Hand-overs, with a reason |
-| `GET /api/partners/:id/requests` | `requests.view` (scope) | A partner's request history: counts (total, open, by kind, by stage, completed shipments count + ₹) and the list |
+| `GET /api/partners/:id/requests` | `requests.view` (scope) + staff app (a partner → 403, DEC-280) | A partner's request history: counts (total, open, by kind, by stage, completed shipments count + ₹) and the list |
 
-- View scope (`scopeForRequests` in `scope.service.ts`): Admin and the Requests Sub-Admin all; Zonal Head partners now in their zone; ASM requests handled by them or their Sales Executives **plus** all requests of partners they own now; Sales Executive only the ones they handle now; Partner their own. **Admin, Sub-Admin and Zonal Head are view only for now** (DEC-164); there is no standalone list — they go through the partner.
+- View scope (`scopeForRequests` in `scope.service.ts`): Admin and the Requests Sub-Admin all; Zonal Head partners now in their zone; ASM requests handled by them or their Sales Executives **plus** all requests of partners they own now; Sales Executive only the ones they handle now; Partner their own. **Admin, Sub-Admin and Zonal Head are view only for now** (DEC-164); they find requests in `GET /api/requests` (web only) or through the partner.
+- **Staff views are staff-only:** a partner holds `requests.view` (own) too, so the staff routes add `requireApp` (DEC-280); partners use `/api/partner/requests`.
 - Partner 360 has a `requests` box for staff with `requests.view` (`requestsBoxFor360`); "My Team" (`GET /api/team`) shows open requests per Sales Executive and for the team.
-- API docs: `docs/api/requests.openapi.yaml` (also `partners` 0.8.0, `uploads` 0.4.0, `users` 0.8.0, `auth` 0.4.2, `settings-permissions` 0.2.2). Manual test plan: `docs/testing/Module 11 complete testing.md`.
+- API docs: `docs/api/requests.openapi.yaml` 0.2.0 (also `partners` 0.10.0, `uploads` 0.4.0, `users` 0.8.0, `auth` 0.4.2, `settings-permissions` 0.2.2). Manual test plan: `docs/testing/Module 11 complete testing.md`.
 
 ---
 

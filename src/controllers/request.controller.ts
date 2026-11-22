@@ -8,6 +8,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ValidationError } from "../utils/errors.js";
 import { idempotencyKey } from "../validators/payout.schema.js";
 import type {
+  allRequestsSchemas,
   assignRequestSchemas,
   takeBackRequestSchemas,
   acceptRequestSchemas,
@@ -174,6 +175,21 @@ export const worklist = asyncHandler<ValidatedRequest<typeof worklistSchemas>>(a
   const { items, meta } = await requestService.listWorklist(getAuthUser(req), req.query);
   sendSuccess(res, 200, items, undefined, meta);
 });
+
+/**
+ * GET /api/requests — every request I may see (web panel, `requests.view` within scope;
+ * F9 T1, DEC-280). All states by default, newest first, paged.
+ */
+export const listAll = asyncHandler<ValidatedRequest<typeof allRequestsSchemas>>(
+  async (req, res) => {
+    const { items, meta } = await requestService.listAllRequests(
+      getAuthUser(req),
+      getScope(req),
+      req.query
+    );
+    sendSuccess(res, 200, items, undefined, meta);
+  }
+);
 
 /** GET /api/requests/:id — `requests.view` within scope: full details with the timeline. */
 export const detail = asyncHandler<ValidatedRequest<typeof requestIdSchemas>>(async (req, res) => {

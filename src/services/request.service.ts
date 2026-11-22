@@ -8,6 +8,7 @@ import { AppError, NotFoundError, ValidationError } from "../utils/errors.js";
 import { dateFromIso, isoFromDate } from "../utils/istDate.js";
 import { pageMeta, toPrismaOrderBy, toPrismaPaging } from "../utils/pagination.js";
 import type {
+  AllRequestsQuery,
   AssignRequestInput,
   TakeBackRequestInput,
   AcceptRequestInput,
@@ -1108,6 +1109,34 @@ function toStaffListItem(row: StaffListRow) {
   };
 }
 
+/** "Made between" (both ends included); nothing when neither is given. */
+function madeBetween(from?: Date, to?: Date): Prisma.PartnerRequestWhereInput {
+  if (!from && !to) return {};
+  return { createdAt: { ...(from && { gte: from }), ...(to && { lte: to }) } };
+}
+
+/**
+ * Part of the request number, or of the partner's name, business name or phone (any case).
+ * A list to spread into an `AND` (empty when there is no search).
+ */
+function searchWhere(search?: string): Prisma.PartnerRequestWhereInput[] {
+  if (!search) return [];
+  return [
+    {
+      OR: [
+        { requestNo: { contains: search, mode: "insensitive" } },
+        { partner: { name: { contains: search, mode: "insensitive" } } },
+        { partner: { phone: { contains: search } } },
+        {
+          partner: {
+            partnerProfile: { is: { businessName: { contains: search, mode: "insensitive" } } },
+          },
+        },
+      ],
+    },
+  ];
+}
+
 /** open / finished / all → a filter (finished = not open, DEC-165, DEC-172). */
 function stateWhere(state: "open" | "finished" | "all"): Prisma.PartnerRequestWhereInput {
   if (state === "open") return OPEN_REQUEST_WHERE;
@@ -1124,7 +1153,6 @@ export async function listWorklist(
   query: WorklistQuery,
   db: Prisma.TransactionClient = prisma
 ) {
-  const search = query.search;
   const where: Prisma.PartnerRequestWhereInput = {
     AND: [
       handlerWhere(me),
@@ -1133,28 +1161,9 @@ export async function listWorklist(
         ...(query.status && { status: query.status }),
         ...(query.category && { category: query.category }),
         ...(query.handlerId && { handlerId: query.handlerId }),
-        ...((query.from || query.to) && {
-          createdAt: { ...(query.from && { gte: query.from }), ...(query.to && { lte: query.to }) },
-        }),
+        ...madeBetween(query.from, query.to),
       },
-      ...(search
-        ? [
-            {
-              OR: [
-                { requestNo: { contains: search, mode: "insensitive" as const } },
-                { partner: { name: { contains: search, mode: "insensitive" as const } } },
-                { partner: { phone: { contains: search } } },
-                {
-                  partner: {
-                    partnerProfile: {
-                      is: { businessName: { contains: search, mode: "insensitive" as const } },
-                    },
-                  },
-                },
-              ],
-            },
-          ]
-        : []),
+      ...searchWhere(query.search),
     ],
   };
   const [rows, total] = await Promise.all([
@@ -1167,6 +1176,74 @@ export async function listWorklist(
     db.partnerRequest.count({ where }),
   ]);
   return { items: rows.map(toStaffListItem), meta: pageMeta(query.page, query.limit, total) };
+}
+
+/** The list row plus the partner's current zone (only `GET /requests`, DEC-280). */
+const ALL_LIST_FIELDS = {
+  ...STAFF_LIST_FIELDS,
+  partner: {
+    select: {
+      ...STAFF_LIST_FIELDS.partner.select,
+      zone: { select: { id: true, name: true } },
+    },
+  },
+} satisfies Prisma.PartnerRequestSelect;
+
+/**
+ * GET /api/requests — every request this web-panel viewer may see (`requests.view`;
+ * F9 T1, DEC-279, DEC-280): Admin / Requests Sub-Admin all, Zonal Head partners now in
+ * their zone. All states by default, newest first. The filters sit on top of the scope,
+ * so one outside it (e.g. another zone) gives an empty list, not an error.
+ * - `zoneId`: the partner's current zone.
+ * - `handlerId`: the person handling it now.
+ * - `asmId`: handled by that ASM or by one of their Sales Executives.
+ */
+export async function listAllRequests(
+  me: AuthUser,
+  scope: PermissionScope,
+  query: AllRequestsQuery,
+  db: Prisma.TransactionClient = prisma
+) {
+  const where: Prisma.PartnerRequestWhereInput = {
+    AND: [
+      scopeForRequests(me, scope),
+      stateWhere(query.state),
+      {
+        ...(query.status && { status: query.status }),
+        ...(query.category && { category: query.category }),
+        ...(query.handlerId && { handlerId: query.handlerId }),
+        ...madeBetween(query.from, query.to),
+      },
+      ...(query.zoneId ? [{ partner: { zoneId: query.zoneId } }] : []),
+      ...(query.asmId
+        ? [
+            {
+              OR: [
+                { handlerId: query.asmId },
+                { handler: { parentId: query.asmId, roleId: ROLE.SALES_EXECUTIVE } },
+              ],
+            },
+          ]
+        : []),
+      ...searchWhere(query.search),
+    ],
+  };
+  const [rows, total] = await Promise.all([
+    db.partnerRequest.findMany({
+      where,
+      orderBy: toPrismaOrderBy(query.sort),
+      ...toPrismaPaging(query.page, query.limit),
+      select: ALL_LIST_FIELDS,
+    }),
+    db.partnerRequest.count({ where }),
+  ]);
+  return {
+    items: rows.map((row) => ({
+      ...toStaffListItem(row),
+      zone: row.partner.zone ? { id: row.partner.zone.id, name: row.partner.zone.name } : null,
+    })),
+    meta: pageMeta(query.page, query.limit, total),
+  };
 }
 
 /** GET /api/requests/:id — full details for any staff viewer within scope (else 404). */

@@ -5,7 +5,7 @@ import * as payoutAccountController from "../controllers/payoutAccount.controlle
 import * as requestController from "../controllers/request.controller.js";
 import * as scanController from "../controllers/scan.controller.js";
 import * as walletController from "../controllers/wallet.controller.js";
-import { requireAuth } from "../middlewares/auth.js";
+import { requireApp, requireAuth } from "../middlewares/auth.js";
 import { requirePermission } from "../middlewares/permission.js";
 import { validate } from "../middlewares/validate.js";
 import {
@@ -142,8 +142,11 @@ router.get(
   scanController.partnerScans
 );
 // A partner's shipment / sample requests (Module 11 T6, DEC-173): `requests.view` within scope.
+// Staff apps only: a partner holds `requests.view` (own) too, but uses /partner/requests
+// (no staff names, DEC-169, DEC-280).
 router.get(
   "/:id/requests",
+  requireApp("web", "field"),
   requirePermission("requests.view"),
   validate(partnerRequestsSchemas),
   requestController.partnerHistory

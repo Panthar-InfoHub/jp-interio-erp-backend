@@ -26,7 +26,8 @@
     "job:escalate-tasks": "tsx src/jobs/escalateTasks.ts",
     "check:parallel-scan": "tsx src/jobs/parallelScanCheck.ts",
     "dev:kyc-test-partners": "tsx src/jobs/makeKycTestPartners.ts",
-    "dev:payout-test-data": "tsx src/jobs/makePayoutTestData.ts"
+    "dev:payout-test-data": "tsx src/jobs/makePayoutTestData.ts",
+    "dev:request-test-data": "tsx src/jobs/makeRequestTestData.ts"
   },
   "keywords": [],
   "author": "",

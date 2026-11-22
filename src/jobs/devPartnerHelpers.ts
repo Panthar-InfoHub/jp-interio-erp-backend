@@ -70,13 +70,17 @@ export async function authUserByPhone(phone: string, sessionId: string): Promise
 }
 
 /**
- * Uploads one small PNG as `actor` exactly like an app: signed link → PUT to R2.
- * Returns the public file URL to save in the KYC step.
+ * Uploads one small PNG (a QR picture of `label`) as `actor` exactly like an app: signed
+ * link → PUT to R2. Returns the public file URL to send to the API.
  */
-export async function uploadKycPhoto(actor: AuthUser, label: string): Promise<string> {
+export async function uploadTestPng(
+  actor: AuthUser,
+  purpose: "kyc" | "request_receipt",
+  label: string
+): Promise<string> {
   const image = await QRCode.toBuffer(label, { type: "png", width: 480, margin: 4 });
   const link = await createUploadLink(actor, {
-    purpose: "kyc",
+    purpose,
     contentType: "image/png",
     sizeBytes: image.length,
   });
@@ -89,6 +93,11 @@ export async function uploadKycPhoto(actor: AuthUser, label: string): Promise<st
     throw new Error(`R2 refused the upload (${response.status}). Check the R2_* settings.`);
   }
   return link.fileUrl;
+}
+
+/** A KYC photo for the sign-up's KYC step. */
+export function uploadKycPhoto(actor: AuthUser, label: string): Promise<string> {
+  return uploadTestPng(actor, "kyc", label);
 }
 
 /**

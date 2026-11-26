@@ -85,6 +85,8 @@ export const ticketQueueSchemas = {
       .default("unfinished"),
     category: ticketCategory.optional(),
     search: z.string().trim().min(1).max(100).optional(),
+    /** One partner's tickets (Partner 360 Tickets tab, DEC-295). */
+    partnerId: z.uuid("Invalid partnerId").optional(),
   }),
 };
 export type TicketQueueQuery = z.output<typeof ticketQueueSchemas.query>;

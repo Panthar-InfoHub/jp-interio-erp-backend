@@ -129,8 +129,11 @@ export const startTaskSchemas = { params: idParams };
 // ---- T4: lists (DEC-182) ----
 
 export const TASK_STATUSES = ["open", "in_progress", "completed", "cancelled"] as const;
-const taskStatus = z.enum(TASK_STATUSES, {
-  message: `status must be one of: ${TASK_STATUSES.join(", ")}`,
+
+/** Team-list status filter: one status, or `unfinished` = open + in progress (DEC-289). */
+export const TEAM_STATUS_FILTERS = [...TASK_STATUSES, "unfinished"] as const;
+const teamStatusFilter = z.enum(TEAM_STATUS_FILTERS, {
+  message: `status must be one of: ${TEAM_STATUS_FILTERS.join(", ")}`,
 });
 
 /** "My tasks" filters. `unfinished` (default) = today + upcoming + overdue (DEC-182). */
@@ -171,6 +174,7 @@ export type MyTasksQuery = z.output<typeof myTasksSchemas.query>;
 
 /**
  * GET /api/tasks — tasks in my scope (`tasks.view`, DEC-182), newest first by default.
+ * - `status`: one status, or `unfinished` (open + in progress, DEC-289).
  * - `assignedToId` / `assignedById` / `zoneId`: one person / zone.
  * - `dueFrom` / `dueTo`: "YYYY-MM-DD", both included.
  * - `overdue=true`: unfinished and the due day has passed.
@@ -183,7 +187,7 @@ export const teamTasksSchemas = {
     defaultSort: "-createdAt",
   })
     .extend({
-      status: taskStatus.optional(),
+      status: teamStatusFilter.optional(),
       priority: taskPriority.optional(),
       category: z.string().trim().min(1).max(TASK_CATEGORY_MAX).optional(),
       assignedToId: z.uuid("Invalid assignedToId").optional(),

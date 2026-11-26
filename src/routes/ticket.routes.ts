@@ -19,6 +19,9 @@ const router = Router();
 router.use(requireAuth, requireApp("web"), requirePermission("tickets.handle"));
 
 router.get("/", validate(ticketQueueSchemas), ticketController.queue);
+// The same 6 codes + names as GET /partner/tickets/categories, for the Admin's filter (DEC-295).
+// Before "/:id", so "categories" isn't read as a ticket id.
+router.get("/categories", ticketController.categories);
 router.get("/:id", validate(ticketIdSchemas), ticketController.detail);
 router.post("/:id/status", validate(changeTicketStatusSchemas), ticketController.changeStatus);
 

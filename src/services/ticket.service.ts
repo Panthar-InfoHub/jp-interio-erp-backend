@@ -224,6 +224,7 @@ function queueWhere(query: TicketQueueQuery): Prisma.SupportTicketWhereInput {
     AND: [
       statusWhere,
       ...(query.category ? [{ category: query.category }] : []),
+      ...(query.partnerId ? [{ partnerId: query.partnerId }] : []),
       ...(query.search
         ? [
             {

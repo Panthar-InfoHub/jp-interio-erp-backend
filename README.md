@@ -61,7 +61,7 @@ Check that it works: open **http://localhost:8080/health**. You should see `"sta
 | `DATABASE_URL` | **Yes** | Neon **pooled** connection (the host contains `-pooler`). Used by the app while running |
 | `DIRECT_URL` | **Yes** | Neon **direct** connection (no `-pooler`). Used by Prisma for migrations |
 | `REPORTS_DATABASE_URL` | No | Dashboards and reports read through this connection (e.g. a Neon **read-only copy**). Empty = `DATABASE_URL` (DEC-210, section 20) |
-| `CORS_ORIGINS` | No | Comma-separated list of web addresses allowed to call the API. Default `http://localhost:3000` |
+| `CORS_ORIGINS` | No | Comma-separated list of web addresses allowed to call the API. Default `http://localhost:3000`. The browser may read the `Content-Disposition` and `X-Row-Count` reply headers (CSV file names and row counts, DEC-299) |
 | `AUTH_SECRET` | **Yes** | One long random secret (32+ characters). It signs login tokens and scrambles OTPs and refresh tokens. **Changing it logs everyone out.** The command to generate one is in `.env.example` |
 | `SMS_PROVIDER` | No | `dummy` (default: prints the OTP in the terminal) or `msg91` (real SMS). `dummy` is refused in production |
 | `MSG91_AUTH_KEY` | With msg91 | MSG91 auth key. **Never commit it** |
@@ -940,7 +940,7 @@ open ──► in_progress ──► completed      (Start is optional: open ─
 | `PATCH /api/tasks/:id` | `tasks.assign` (giver or above) | Edit title, description, category, priority, due date |
 | `POST /api/tasks/:id/cancel` | `tasks.assign` (giver or above) | Cancel with a reason |
 | `GET /api/tasks/mine` | `tasks.complete` | Tasks given to me: `view` = unfinished (default) / today / upcoming / overdue / completed / cancelled, plus counts for every view |
-| `GET /api/tasks` | `tasks.view` (scope) | Team list; filters `status`, `priority`, `category`, `assignedToId`, `assignedById`, `zoneId`, `dueFrom`, `dueTo`, `overdue`, `escalatedToMe`, `search`; sort `createdAt` / `dueDate` / `completedAt` |
+| `GET /api/tasks` | `tasks.view` (scope) | Team list; filters `status` (one status, or `unfinished` = open + in progress, DEC-289), `priority`, `category`, `assignedToId`, `assignedById`, `zoneId`, `dueFrom`, `dueTo`, `overdue`, `escalatedToMe`, `search`; sort `createdAt` / `dueDate` / `completedAt` |
 | `GET /api/tasks/:id` | `tasks.view` scope **or** given to me | Full details with photos |
 | `POST /api/tasks/:id/start` | `tasks.complete` (doer) | open → in_progress |
 | `POST /api/tasks/:id/complete` | `tasks.complete` (doer) | Complete with 1–10 photos + optional note |
@@ -987,7 +987,8 @@ open ──► in_progress ──► resolved      (open ──► resolved dire
 | `POST /api/partner/tickets` | Partner, `tickets.create` | Raise a ticket (0–5 photos) |
 | `GET /api/partner/tickets` | Partner, `tickets.create` | My tickets, newest first, optional `status` |
 | `GET /api/partner/tickets/:id` | Partner, `tickets.create` | One own ticket; someone else's → 404 |
-| `GET /api/tickets` | Admin, `tickets.handle`, web | Queue: `status` = unfinished (default) / all / one status; `category`; `search` (ticket number, partner name, phone); counts per status (over all tickets) |
+| `GET /api/tickets` | Admin, `tickets.handle`, web | Queue: `status` = unfinished (default) / all / one status; `category`; `search` (ticket number, partner name, phone); `partnerId` (one partner, DEC-295); counts per status (over all tickets) |
+| `GET /api/tickets/categories` | Admin, `tickets.handle`, web | The 6 category codes + names, same as the partner endpoint (DEC-295) |
 | `GET /api/tickets/:id` | Admin, `tickets.handle`, web | Full ticket with photos, the partner (phone, type, zone, KYC state), who last changed it |
 | `POST /api/tickets/:id/status` | Admin, `tickets.handle`, web | `in_progress` / `resolved` / `rejected` (+ `note` for the last two) |
 

@@ -559,8 +559,9 @@ export async function listTeamTasks(
   const where: Prisma.TaskWhereInput = {
     AND: [
       scopeForTasks(me, scope),
+      ...(query.status === "unfinished" ? [UNFINISHED] : []),
       {
-        ...(query.status && { status: query.status }),
+        ...(query.status && query.status !== "unfinished" && { status: query.status }),
         ...(query.priority && { priority: query.priority }),
         ...(query.category && { category: { equals: query.category, mode: "insensitive" } }),
         ...(query.assignedToId && { assignedToId: query.assignedToId }),

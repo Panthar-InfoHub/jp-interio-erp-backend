@@ -15,7 +15,10 @@ import type {
 // T2: the partner side — /api/partner/tickets (DEC-192)
 // ---------------------------------------------------------------------------
 
-/** GET /api/partner/tickets/categories — codes and display names. */
+/**
+ * GET /api/partner/tickets/categories (partner) and GET /api/tickets/categories (Admin,
+ * DEC-295) — codes and display names.
+ */
 export const categories = asyncHandler(async (_req, res) => {
   sendSuccess(res, 200, ticketService.listCategories());
 });

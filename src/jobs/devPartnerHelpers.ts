@@ -18,7 +18,9 @@ import {
 
 /**
  * Shared pieces of the DEV-ONLY test-data scripts (`dev:kyc-test-partners`,
- * `dev:payout-test-data`). Everything goes through the same services the apps use.
+ * `dev:payout-test-data`, `dev:request-test-data`, `dev:task-test-data`,
+ * `dev:ticket-test-data`). Everything goes
+ * through the same services the apps use.
  */
 
 /** A test partner the scripts sign up (carpenter, one bank account or UPI ID). */
@@ -75,7 +77,7 @@ export async function authUserByPhone(phone: string, sessionId: string): Promise
  */
 export async function uploadTestPng(
   actor: AuthUser,
-  purpose: "kyc" | "request_receipt",
+  purpose: "kyc" | "request_receipt" | "task_photo" | "ticket_photo",
   label: string
 ): Promise<string> {
   const image = await QRCode.toBuffer(label, { type: "png", width: 480, margin: 4 });

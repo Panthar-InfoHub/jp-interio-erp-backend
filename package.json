@@ -27,7 +27,9 @@
     "check:parallel-scan": "tsx src/jobs/parallelScanCheck.ts",
     "dev:kyc-test-partners": "tsx src/jobs/makeKycTestPartners.ts",
     "dev:payout-test-data": "tsx src/jobs/makePayoutTestData.ts",
-    "dev:request-test-data": "tsx src/jobs/makeRequestTestData.ts"
+    "dev:request-test-data": "tsx src/jobs/makeRequestTestData.ts",
+    "dev:task-test-data": "tsx src/jobs/makeTaskTestData.ts",
+    "dev:ticket-test-data": "tsx src/jobs/makeTicketTestData.ts"
   },
   "keywords": [],
   "author": "",

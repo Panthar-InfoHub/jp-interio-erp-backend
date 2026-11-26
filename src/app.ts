@@ -40,6 +40,8 @@ app.use(
   cors({
     origin: env.CORS_ORIGINS,
     credentials: true,
+    // Let the web console read a download's file name and row count (CSV reports, DEC-299).
+    exposedHeaders: ["Content-Disposition", "X-Row-Count"],
   })
 );
 

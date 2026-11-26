@@ -70,6 +70,7 @@ Check that it works: open **http://localhost:8080/health**. You should see `"sta
 | `TEST_PHONES` | No | Comma-separated test mobiles. They log in with `TEST_OTP` and get no SMS |
 | `TEST_OTP` | With test phones | The fixed 6-digit OTP for test phones |
 | `ALLOW_TEST_PHONES_IN_PRODUCTION` | No | `false` (default). Test phones are off in production unless this is `true` |
+| `CRON_SECRET` | On the server | 32+ random characters. The hosting scheduler sends it as `Authorization: Bearer …` to run the nightly jobs (`POST /api/internal/jobs/…`, section 18.3). Empty = those endpoints don't exist (404). **Never commit it** (DEC-313) |
 | `SEED_ADMIN_NAME` | For seed | Name of the first Admin |
 | `SEED_ADMIN_PHONE` | For seed | First Admin's 10-digit Indian mobile number. Stored as `91XXXXXXXXXX` |
 | `SEED_ADMIN_EMAIL` | No | First Admin's email (optional) |
@@ -952,7 +953,14 @@ open ──► in_progress ──► completed      (Start is optional: open ─
 
 - `src/services/taskEscalation.service.ts` (`escalateOverdueTasks` → `findTasksToFlag` + `flagTaskInTx`): every unfinished task past its due day and not flagged yet is flagged **once** to the doer's **direct manager** (their saved `parentId`; a manager who isn't active → the next one up): `escalated_at` + `escalated_to`, audit `task.escalate` with no actor. **The task stays with the doer.** One small transaction per task; each re-checked under its row lock, so runs can overlap safely.
 - `src/jobs/taskEscalation.job.ts`, started in `server.ts`: **5 minutes after start-up**, then **every night at 00:30 India time (19:00 UTC)**. By hand: `npm run job:escalate-tasks`.
-- **Serverless hosting:** in-server timers don't run reliably there. Use the platform's scheduler to run `npm run job:escalate-tasks` at 19:00 UTC instead (open for Module 18). The same applies to `job:clean-drafts`.
+- **Serverless hosting (Cloud Run, DEC-313):** in-server timers don't run reliably there, so **Cloud Scheduler** calls two internal endpoints, locked by `CRON_SECRET` (`Authorization: Bearer <CRON_SECRET>`; no secret set → 404, wrong → 401):
+
+  | Endpoint | Runs | Schedule |
+  |---|---|---|
+  | `POST /api/internal/jobs/escalate-tasks` | `escalateOverdueTasks` (same as `npm run job:escalate-tasks`) | daily 00:30 IST |
+  | `POST /api/internal/jobs/clean-drafts` | `removeExpiredDrafts` (same as `npm run job:clean-drafts`) | daily 02:00 IST |
+
+  Both reply `200` with the counts and are safe to call twice. Not for apps or the panel, and not in the Apidog files. Code: `src/routes/internal.routes.ts`, `src/middlewares/cronSecret.ts`, `src/controllers/internalJobs.controller.ts`.
 
 ### 18.4 People changes and staff screens
 

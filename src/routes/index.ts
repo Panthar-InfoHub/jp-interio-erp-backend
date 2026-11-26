@@ -7,6 +7,7 @@ import categoryRoutes from "./category.routes.js";
 import dashboardRoutes from "./dashboard.routes.js";
 import devRoutes from "./dev.routes.js";
 import fieldOnboardingRoutes from "./fieldOnboarding.routes.js";
+import internalRoutes from "./internal.routes.js";
 import kycRoutes from "./kyc.routes.js";
 import ledgerRoutes from "./ledger.routes.js";
 import onboardingRoutes from "./onboarding.routes.js";
@@ -55,6 +56,9 @@ router.use("/requests", requestRoutes);
 router.use("/tasks", taskRoutes);
 router.use("/tickets", ticketRoutes);
 router.use("/dashboard", dashboardRoutes);
+
+// The hosting scheduler's nightly jobs (DEC-313); 404 unless CRON_SECRET is set.
+router.use("/internal", internalRoutes);
 
 // Development-only tools (DEC-050). Never available in production.
 if (!isProd) router.use("/dev", devRoutes);

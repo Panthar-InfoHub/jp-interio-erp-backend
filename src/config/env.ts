@@ -98,6 +98,15 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+
+  // Secret the hosting scheduler (Cloud Scheduler) sends as `Authorization: Bearer <it>`
+  // to run the nightly jobs over HTTP (DEC-313). Empty = those endpoints are switched off.
+  CRON_SECRET: z
+    .string()
+    .trim()
+    .min(32, "must be at least 32 characters (use a long random string)")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -8,7 +8,7 @@
  *   anything that already exists.
  * - Everything runs in one transaction; every new record writes an audit row with
  *   an empty actor ("system") and `source: "dev-data"`.
- * - All names start with "TEST"; zone codes are TPUNE and TMUM.
+ * - All names start with "TEST"; zone codes are TPUNE, TMUM, TNAG, TEMPTY and TDL-01 (inactive).
  * - Every phone must be added to TEST_PHONES in .env to log in (with TEST_OTP).
  */
 import "dotenv/config";
@@ -36,11 +36,20 @@ interface ZoneSpec {
   name: string;
   region: string;
   state: string;
+  status?: "active" | "inactive";
 }
 
+/**
+ * TPUNE / TMUM from the start; TNAG, TEMPTY and TDL-01 were first made by hand in the
+ * Module 4 and F6 tests and are added here so a fresh database matches the panel testing
+ * guide (DEC-311).
+ */
 const ZONES: ZoneSpec[] = [
   { code: "TPUNE", name: "TEST Pune", region: "West", state: "Maharashtra" },
   { code: "TMUM", name: "TEST Mumbai", region: "West", state: "Maharashtra" },
+  { code: "TNAG", name: "TEST Nagpur City", region: "Central", state: "Maharashtra" },
+  { code: "TEMPTY", name: "TEST Empty", region: "West", state: "Maharashtra" },
+  { code: "TDL-01", name: "TEST Delhi", region: "North", state: "Delhi", status: "inactive" },
 ];
 
 interface PartnerSpec {
@@ -95,6 +104,14 @@ const PEOPLE: PersonSpec[] = [
     note: "no areas (should be refused everywhere)",
   },
   {
+    key: "sa_tasks",
+    name: "TEST Sub-Admin Tasks",
+    roleId: ROLE.SUB_ADMIN,
+    phone: "9000000104",
+    areas: ["tasks"],
+    note: "area: Tasks (Module 12 / F10)",
+  },
+  {
     key: "sa_products",
     name: "TEST Sub-Admin Products",
     roleId: ROLE.SUB_ADMIN,
@@ -127,13 +144,29 @@ const PEOPLE: PersonSpec[] = [
     note: "",
   },
   {
+    key: "zh_nagpur",
+    name: "TEST Nagpur ZH",
+    roleId: ROLE.ZONAL_HEAD,
+    phone: "9000000113",
+    zone: "TNAG",
+    note: "",
+  },
+  {
+    key: "zh_spare",
+    name: "TEST Spare ZH",
+    roleId: ROLE.ZONAL_HEAD,
+    phone: "9000000114",
+    zone: "TEMPTY",
+    note: "in charge of TEST Empty (no people)",
+  },
+  {
     key: "asm_pune_1",
     name: "TEST Pune ASM 1",
     roleId: ROLE.ASM,
     phone: "9000000121",
     parent: "zh_pune",
     zone: "TPUNE",
-    note: "has 2 Sales Executives",
+    note: "has 4 Sales Executives",
   },
   {
     key: "asm_pune_2",
@@ -143,6 +176,24 @@ const PEOPLE: PersonSpec[] = [
     parent: "zh_pune",
     zone: "TPUNE",
     note: "no Sales Executives",
+  },
+  {
+    key: "asm_pune_3",
+    name: "TEST Pune ASM 3",
+    roleId: ROLE.ASM,
+    phone: "9000000124",
+    parent: "zh_pune",
+    zone: "TPUNE",
+    note: "no team",
+  },
+  {
+    key: "asm_pune_4",
+    name: "TEST Pune ASM 4",
+    roleId: ROLE.ASM,
+    phone: "9000000125",
+    parent: "zh_pune",
+    zone: "TPUNE",
+    note: "no team",
   },
   {
     key: "asm_mumbai_1",
@@ -167,6 +218,24 @@ const PEOPLE: PersonSpec[] = [
     name: "TEST SE 2",
     roleId: ROLE.SALES_EXECUTIVE,
     phone: "9000000132",
+    parent: "asm_pune_1",
+    zone: "TPUNE",
+    note: "",
+  },
+  {
+    key: "se_3",
+    name: "TEST SE 3",
+    roleId: ROLE.SALES_EXECUTIVE,
+    phone: "9000000133",
+    parent: "asm_pune_1",
+    zone: "TPUNE",
+    note: "",
+  },
+  {
+    key: "se_4",
+    name: "TEST SE 4",
+    roleId: ROLE.SALES_EXECUTIVE,
+    phone: "9000000134",
     parent: "asm_pune_1",
     zone: "TPUNE",
     note: "",

@@ -98,7 +98,7 @@ const PLANS: Plan[] = [
   },
   {
     key: "E",
-    phone: "919000000199",
+    phone: "919000000145",
     credit: 1000,
     payouts: [
       { points: 400, outcome: { to: "requested" } },
